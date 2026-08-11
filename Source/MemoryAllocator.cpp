@@ -33,7 +33,8 @@ MemoryAllocator::MemoryAllocator(
     physDevice(std::move(_physDevice)),
     allocator(VK_NULL_HANDLE),
     texturesStagingPool(VK_NULL_HANDLE),
-    texturesFinalPool(VK_NULL_HANDLE)
+    texturesFinalPool(VK_NULL_HANDLE),
+    isAmd(false)
 {
     VmaAllocatorCreateInfo allocatorInfo = {};
     allocatorInfo.instance = _instance;
@@ -51,26 +52,40 @@ MemoryAllocator::MemoryAllocator(
     VkResult r = vmaCreateAllocator(&allocatorInfo, &allocator);
     VK_CHECKERROR(r);
 
-    CreateTexturesStagingPool();
-    CreateTexturesFinalPool();
+    VkPhysicalDeviceProperties props;
+    vkGetPhysicalDeviceProperties(physDevice->Get(), &props);
+    isAmd = (props.vendorID == 0x1002);
+
+    if (!isAmd)
+    {
+        CreateTexturesStagingPool();
+        CreateTexturesFinalPool();
+    }
 }
 
 MemoryAllocator::~MemoryAllocator()
 {
     assert(bufAllocs.size() == 0);
 
-    vmaDestroyPool(allocator, texturesStagingPool);
-    vmaDestroyPool(allocator, texturesFinalPool);
+    if (texturesStagingPool != VK_NULL_HANDLE) vmaDestroyPool(allocator, texturesStagingPool);
+    if (texturesFinalPool != VK_NULL_HANDLE) vmaDestroyPool(allocator, texturesFinalPool);
     vmaDestroyAllocator(allocator);
 }
 
 VkBuffer MemoryAllocator::CreateStagingSrcTextureBuffer(const VkBufferCreateInfo *info, const char *pDebugName, void **pOutMappedData, VkDeviceMemory *outMemory)
 {
     VmaAllocationCreateInfo allocInfo = {};
-    // alloc TRANSFER_SRC buffer with writeable by CPU memory
-    allocInfo.usage = VMA_MEMORY_USAGE_CPU_ONLY;
     allocInfo.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT | VMA_ALLOCATION_CREATE_USER_DATA_COPY_STRING_BIT;
     allocInfo.pUserData = const_cast<char *>(pDebugName);
+
+    if (isAmd)
+    {
+        allocInfo.usage = VMA_MEMORY_USAGE_CPU_ONLY;
+    }
+    else
+    {
+        allocInfo.pool = texturesStagingPool;
+    }
 
     VkBuffer buffer;
     VmaAllocation resultAlloc;
@@ -103,10 +118,17 @@ VkBuffer MemoryAllocator::CreateStagingSrcTextureBuffer(const VkBufferCreateInfo
 VkImage MemoryAllocator::CreateDstTextureImage(const VkImageCreateInfo *info, const char *pDebugName, VkDeviceMemory *outMemory)
 {
     VmaAllocationCreateInfo allocInfo = {};
-    // alloc SAMPLED_BIT | TRANSFER_DST
-    allocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
     allocInfo.flags = VMA_ALLOCATION_CREATE_USER_DATA_COPY_STRING_BIT;
     allocInfo.pUserData = const_cast<char *>(pDebugName);
+
+    if (isAmd)
+    {
+        allocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+    }
+    else
+    {
+        allocInfo.pool = texturesFinalPool;
+    }
 
     VkImage image;
     VmaAllocation resultAlloc;

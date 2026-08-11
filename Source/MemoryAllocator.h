@@ -85,6 +85,10 @@ private:
     // texture data will be copied from staging to this memory
     VmaPool texturesFinalPool;
 
+    // On AMD RDNA 4+, VMA pools with fixed memoryTypeIndex may pick the wrong
+    // memory heap (small BAR region instead of main VRAM). Use direct allocations.
+    bool isAmd;
+
     // maps for freeing corresponding allocations
     rgl::unordered_map<VkBuffer, VmaAllocation> bufAllocs;
     rgl::unordered_map<VkImage, VmaAllocation> imgAllocs;
