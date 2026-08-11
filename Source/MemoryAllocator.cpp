@@ -68,7 +68,7 @@ VkBuffer MemoryAllocator::CreateStagingSrcTextureBuffer(const VkBufferCreateInfo
 {
     VmaAllocationCreateInfo allocInfo = {};
     // alloc TRANSFER_SRC buffer with writeable by CPU memory
-    allocInfo.pool = texturesStagingPool;
+    allocInfo.usage = VMA_MEMORY_USAGE_CPU_ONLY;
     allocInfo.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT | VMA_ALLOCATION_CREATE_USER_DATA_COPY_STRING_BIT;
     allocInfo.pUserData = const_cast<char *>(pDebugName);
 
@@ -104,7 +104,7 @@ VkImage MemoryAllocator::CreateDstTextureImage(const VkImageCreateInfo *info, co
 {
     VmaAllocationCreateInfo allocInfo = {};
     // alloc SAMPLED_BIT | TRANSFER_DST
-    allocInfo.pool = texturesFinalPool;
+    allocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
     allocInfo.flags = VMA_ALLOCATION_CREATE_USER_DATA_COPY_STRING_BIT;
     allocInfo.pUserData = const_cast<char *>(pDebugName);
 

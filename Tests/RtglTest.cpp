@@ -426,14 +426,18 @@ static void MainLoop( RgInstance instance, std::string_view gltfPath )
 
     // some resources can be initialized out of frame
     {
+        const uint32_t white = 0xFFFFFFFF;
+        const void* pWhitePixels[6] = { &white, &white, &white, &white, &white, &white };
         RgCubemapCreateInfo skyboxInfo = 
         {
+            .pData    = { &white, &white, &white, &white, &white, &white },
             .relativePathFaces = {
                 "Cubemap/px", "Cubemap/nx",
                 "Cubemap/py", "Cubemap/ny",
                 "Cubemap/pz", "Cubemap/nz", 
             },
-            .useMipmaps = true,
+            .sideSize   = 1,
+            .useMipmaps = false,
         };
         r = rgCreateCubemap( instance, &skyboxInfo, &skybox );
         RG_CHECK( r );

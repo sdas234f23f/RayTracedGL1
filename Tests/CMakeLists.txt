@@ -44,7 +44,8 @@ target_link_libraries(RtglTest glfw)
 target_include_directories(RtglTest PUBLIC )
 target_include_directories(RtglTest PUBLIC Libs/glm)
 
-# copy dll-s to exe directory
+# copy dll-s to exe directory - disabled: DLL is in Build/, test runs from there
+if(FALSE)
 get_target_property(RTGL1_DLL_PATH RayTracedGL1 IMPORTED_LOCATION)
 get_target_property(RTGL1_DLL_PATH_D RayTracedGL1 IMPORTED_LOCATION_DEBUG)
 add_custom_command(TARGET RtglTest POST_BUILD
@@ -55,3 +56,4 @@ add_custom_command(TARGET RtglTest POST_BUILD
     "$<$<CONFIG:Release>:${RTGL1_DLL_PATH}>"
     $<TARGET_FILE_DIR:RtglTest>/${CMAKE_SHARED_LIBRARY_PREFIX}RayTracedGL1${CMAKE_SHARED_LIBRARY_SUFFIX}
 )
+endif()

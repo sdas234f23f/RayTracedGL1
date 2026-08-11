@@ -3,6 +3,8 @@ project(RayTracedGL1 CXX C)
 
 set(CMAKE_CXX_STANDARD 20)
 
+string(TOUPPER "${CMAKE_BUILD_TYPE}" BUILD_TYPE )
+
 # Vulkan
 message(STATUS "Adding Vulkan. VulkanSDK: $ENV{VULKAN_SDK}")
 find_package(Vulkan REQUIRED)
