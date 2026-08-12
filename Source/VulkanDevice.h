@@ -23,6 +23,7 @@
 #include <RTGL1/RTGL1.h>
 
 #include <memory>
+#include <optional>
 
 #include "Common.h"
 
@@ -51,7 +52,7 @@
 #include "EffectWipe.h"
 #include "EffectSimple_Instances.h"
 #include "LightGrid.h"
-#include "FSR3.h"
+#include "FSR.h"
 #include "FrameState.h"
 #include "LibraryConfig.h"
 #include "PortalList.h"
@@ -173,7 +174,7 @@ private:
     std::shared_ptr<Tonemapping>            tonemapping;
     std::shared_ptr<ImageComposition>       imageComposition;
     std::shared_ptr<Bloom>                  bloom;
-    std::shared_ptr<FSR3>                   amdFsr3;
+    std::shared_ptr<FSR>                    amdFsr;
     std::shared_ptr<DLSS>                   nvDlss;
     std::shared_ptr<Sharpening>             sharpening;
     std::shared_ptr<EffectWipe>                 effectWipe;
@@ -203,6 +204,10 @@ private:
     bool                                    lensFlareVerticesInScreenSpace;
 
     RenderResolutionHelper                  renderResolution;
+
+    // Last upscale technique requested by the application; used to detect
+    // actual FSR version switches (FSR 2 <-> FSR 3.1) without polling each frame.
+    std::optional<RgRenderUpscaleTechnique> lastUpscaleTechnique;
 
     double                                  previousFrameTime;
     double                                  currentFrameTime;

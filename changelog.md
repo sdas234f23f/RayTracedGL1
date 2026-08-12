@@ -1,5 +1,18 @@
 # Changelog (quake-fsr31-support)
 
+## v2.2.0
+
+### Added
+- **Explicit FSR version selection** — RTGL1 now tells the FidelityFX framework which FSR algorithm to use via `ffxOverrideVersion` instead of letting the framework pick the "best" provider by itself:
+  - `RG_RENDER_UPSCALE_TECHNIQUE_AMD_FSR2` → FSR 2.x
+  - `RG_RENDER_UPSCALE_TECHNIQUE_AMD_FSR3` → FSR 3.1
+- Switching between FSR 2 and FSR 3.1 works at runtime (the FidelityFX context is recreated on version change)
+- If the requested FSR version is not present in `amd_fidelityfx_vk.dll`, RTGL1 falls back to the other version and prints a message to the game console (`pfnPrint`)
+- `rgIsRenderUpscaleTechniqueAvailable` now actually checks whether the requested FSR version exists in the DLL
+
+### Changed
+- `Source/FSR3.{h,cpp}` renamed to `Source/FSR.{h,cpp}`, class `FSR3` renamed to `FSR` (it now handles both FSR 2 and FSR 3.1)
+
 ## v2.1.0
 
 ### Added
@@ -10,7 +23,7 @@
 
 ### Changed
 - FSR 3.1 is always enabled (no compile-time flag; `RG_USE_FSR3` is unconditional)
-- `RG_RENDER_UPSCALE_TECHNIQUE_AMD_FSR2` is kept as a legacy alias — all FSR paths now use FSR 3.1 internally
+- `RG_RENDER_UPSCALE_TECHNIQUE_AMD_FSR2` is kept as a legacy alias — all FSR paths now use FSR 3.1 internally *(obsolete since v2.2.0: FSR 2 and FSR 3.1 are distinct, explicitly selected)*
 
 ### Removed
 - Old FSR2 code (`Source/FSR2.cpp`, `Source/FSR2.h`)

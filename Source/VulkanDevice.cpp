@@ -176,7 +176,7 @@ void VulkanDevice::FillUniform(ShGlobalUniform *gu, const RgDrawFrameInfo &drawI
         gu->upscaledRenderHeight = static_cast< float >( renderResolution.UpscaledHeight() );
 
         RgFloat2D jitter = renderResolution.IsNvDlssEnabled() ? HaltonSequence::GetJitter_Halton23( frameId ) :
-                           (renderResolution.IsAmdFsr2Enabled() || renderResolution.IsAmdFsr3Enabled()) ? FSR3::GetJitter( renderResolution.GetResolutionState(), frameId ) :
+                           (renderResolution.IsAmdFsr2Enabled() || renderResolution.IsAmdFsr3Enabled()) ? FSR::GetJitter( renderResolution.GetResolutionState(), frameId ) :
                            RgFloat2D{ 0, 0 };
 
         gu->jitterX = jitter.data[ 0 ];
@@ -706,7 +706,7 @@ void VulkanDevice::Render(VkCommandBuffer cmd, const RgDrawFrameInfo &drawInfo)
         }
         else if (renderResolution.IsAmdFsr2Enabled() || renderResolution.IsAmdFsr3Enabled())
         {
-            accum = amdFsr3->Apply(cmd, frameIndex, 
+            accum = amdFsr->Apply(cmd, frameIndex, 
                                                 framebuffers, 
                                                 renderResolution, 
                                                 jitter, 
@@ -859,6 +859,15 @@ void VulkanDevice::DrawFrame(const RgDrawFrameInfo *drawInfo)
     renderResolution.Setup(drawInfo->pRenderResolutionParams,
                            swapchain->GetWidth(), swapchain->GetHeight(), nvDlss);
 
+    // Tell the FidelityFX framework which FSR version to use (FSR 2 or FSR 3.1),
+    // but only when the technique actually changes (or on the first frame).
+    if (!lastUpscaleTechnique.has_value() ||
+        *lastUpscaleTechnique != renderResolution.GetUpscaleTechnique())
+    {
+        lastUpscaleTechnique = renderResolution.GetUpscaleTechnique();
+        amdFsr->SetUpscaleVersion(*lastUpscaleTechnique);
+    }
+
     textureManager->CheckForHotReload(cmd);
 
     if (renderResolution.Width() > 0 && renderResolution.Height() > 0)
@@ -887,9 +896,10 @@ bool RTGL1::VulkanDevice::IsRenderUpscaleTechniqueAvailable(RgRenderUpscaleTechn
     {
         case RG_RENDER_UPSCALE_TECHNIQUE_NEAREST:
         case RG_RENDER_UPSCALE_TECHNIQUE_LINEAR:
+            return true;
         case RG_RENDER_UPSCALE_TECHNIQUE_AMD_FSR2:
         case RG_RENDER_UPSCALE_TECHNIQUE_AMD_FSR3:
-            return true;
+            return FSR::IsUpscaleVersionAvailable(technique);
         case RG_RENDER_UPSCALE_TECHNIQUE_NVIDIA_DLSS:
             return nvDlss->IsDlssAvailable();
         default:

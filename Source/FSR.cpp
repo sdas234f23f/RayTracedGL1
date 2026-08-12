@@ -18,7 +18,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-#include "FSR3.h"
+#include "FSR.h"
 
 #include <ffx_api/ffx_api.h>
 #include <ffx_api/ffx_upscale.h>
@@ -28,14 +28,16 @@
 #include "RgException.h"
 
 #include <Windows.h>
-#define FSR3_TRACE(msg) OutputDebugStringA("[FSR3] " msg "\n")
+#include <vector>
+
+#define FSR_TRACE(msg) OutputDebugStringA("[FSR] " msg "\n")
 
 namespace
 {
     void FsrMessageCallback(uint32_t type, const wchar_t* msg)
     {
         char buf[512];
-        snprintf(buf, sizeof(buf), "[FSR3] type=%u: %S\n", type, msg);
+        snprintf(buf, sizeof(buf), "[FSR] type=%u: %S\n", type, msg);
         OutputDebugStringA(buf);
     }
 
@@ -133,44 +135,193 @@ namespace
     }
 }
 
-RTGL1::FSR3::FSR3(VkDevice _device, VkPhysicalDevice _physDevice)
+RTGL1::FSR::FSR(VkDevice _device, VkPhysicalDevice _physDevice, UserPrint* pUserPrint)
     : m_device(_device)
     , m_physDevice(_physDevice)
+    , m_pUserPrint(pUserPrint)
     , m_context(nullptr)
+    , m_requestedTechnique(RG_RENDER_UPSCALE_TECHNIQUE_AMD_FSR3)
+    , m_technique(RG_RENDER_UPSCALE_TECHNIQUE_AMD_FSR3)
     , m_renderWidth(0)
     , m_renderHeight(0)
     , m_displayWidth(0)
     , m_displayHeight(0)
+    , m_hasSize(false)
 {
-    FSR3_TRACE("Constructor");
+    FSR_TRACE("Constructor");
 }
 
-RTGL1::FSR3::~FSR3()
+RTGL1::FSR::~FSR()
 {
-    if (m_context)
-    {
-        ffxDestroyContext(&m_context, nullptr);
-        m_context = nullptr;
-    }
+    DestroyContext();
 }
 
-void RTGL1::FSR3::OnFramebuffersSizeChange(const ResolutionState& resolutionState)
+void RTGL1::FSR::SetUpscaleVersion(RgRenderUpscaleTechnique technique)
 {
-    if (m_context)
+    if (technique != RG_RENDER_UPSCALE_TECHNIQUE_AMD_FSR2 &&
+        technique != RG_RENDER_UPSCALE_TECHNIQUE_AMD_FSR3)
     {
-        ffxDestroyContext(&m_context, nullptr);
-        m_context = nullptr;
+        // FSR is not used, destroy the context (if any) and remember the technique
+        m_requestedTechnique = technique;
+        m_technique = technique;
+        if (m_context)
+        {
+            vkDeviceWaitIdle(m_device);
+            DestroyContext();
+        }
+        return;
     }
 
+    if (technique == m_requestedTechnique && m_context)
+    {
+        return;
+    }
+
+    // The FidelityFX context is recreated on version change. Make sure the GPU
+    // is no longer using the old context's resources before destroying them.
+    vkDeviceWaitIdle(m_device);
+
+    m_requestedTechnique = technique;
+    RecreateContext();
+}
+
+void RTGL1::FSR::OnFramebuffersSizeChange(const ResolutionState& resolutionState)
+{
     m_renderWidth  = resolutionState.renderWidth;
     m_renderHeight = resolutionState.renderHeight;
     m_displayWidth  = resolutionState.upscaledWidth;
     m_displayHeight = resolutionState.upscaledHeight;
+    m_hasSize = true;
 
     char buf[128];
-    snprintf(buf, sizeof(buf), "[FSR3] OnFramebuffersSizeChange: render=%ux%u upscale=%ux%u\n",
+    snprintf(buf, sizeof(buf), "[FSR] OnFramebuffersSizeChange: render=%ux%u upscale=%ux%u\n",
         m_renderWidth, m_renderHeight, m_displayWidth, m_displayHeight);
     OutputDebugStringA(buf);
+
+    if (m_requestedTechnique == RG_RENDER_UPSCALE_TECHNIQUE_AMD_FSR2 ||
+        m_requestedTechnique == RG_RENDER_UPSCALE_TECHNIQUE_AMD_FSR3)
+    {
+        RecreateContext();
+    }
+    else
+    {
+        DestroyContext();
+    }
+}
+
+uint64_t RTGL1::FSR::FindVersionId(bool preferFsr3)
+{
+    ffxQueryDescGetVersions q = {};
+    q.header.type       = FFX_API_QUERY_DESC_TYPE_GET_VERSIONS;
+    q.createDescType    = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE;
+    q.device            = nullptr; // Vulkan backend ignores this
+    uint64_t count      = 0;
+    q.outputCount       = &count;
+
+    if (ffxQuery(nullptr, &q.header) != FFX_API_RETURN_OK || count == 0)
+    {
+        FSR_TRACE("FindVersionId: failed to enumerate versions");
+        return 0;
+    }
+
+    std::vector<uint64_t> ids(count);
+    std::vector<const char*> names(count);
+    q.versionIds   = ids.data();
+    q.versionNames = names.data();
+
+    if (ffxQuery(nullptr, &q.header) != FFX_API_RETURN_OK)
+    {
+        FSR_TRACE("FindVersionId: failed to fetch versions");
+        return 0;
+    }
+
+    // Version names are like "2.3.3" (FSR2) or "3.1.4" (FSR3.1). Match by the major version.
+    for (uint64_t i = 0; i < count; i++)
+    {
+        const char* name = names[i] ? names[i] : "";
+        if (preferFsr3)
+        {
+            if (name[0] == '3')
+            {
+                return ids[i];
+            }
+        }
+        else
+        {
+            if (name[0] == '2')
+            {
+                return ids[i];
+            }
+        }
+    }
+
+    return 0;
+}
+
+bool RTGL1::FSR::IsUpscaleVersionAvailable(RgRenderUpscaleTechnique technique)
+{
+    switch (technique)
+    {
+        case RG_RENDER_UPSCALE_TECHNIQUE_AMD_FSR2:
+            return FindVersionId(false) != 0;
+        case RG_RENDER_UPSCALE_TECHNIQUE_AMD_FSR3:
+            return FindVersionId(true) != 0;
+        default:
+            return false;
+    }
+}
+
+void RTGL1::FSR::RecreateContext()
+{
+    DestroyContext();
+
+    if (!m_hasSize)
+    {
+        return;
+    }
+
+    bool preferFsr3 = (m_requestedTechnique == RG_RENDER_UPSCALE_TECHNIQUE_AMD_FSR3);
+    uint64_t versionId = FindVersionId(preferFsr3);
+
+    if (versionId == 0)
+    {
+        // Requested version is not present in the DLL — fallback to the other one
+        const char* requested = preferFsr3 ? "FSR 3.1" : "FSR 2";
+        const char* fallback  = preferFsr3 ? "FSR 2" : "FSR 3.1";
+
+        char buf[256];
+        snprintf(buf, sizeof(buf), "FSR: %s is not available, falling back to %s", requested, fallback);
+        OutputDebugStringA(buf);
+        if (m_pUserPrint)
+        {
+            m_pUserPrint->Print(buf);
+        }
+
+        versionId = FindVersionId(!preferFsr3);
+        if (versionId == 0)
+        {
+            const char* msg = "FSR: no FSR provider found in the FidelityFX DLL";
+            OutputDebugStringA(msg);
+            if (m_pUserPrint)
+            {
+                m_pUserPrint->Print(msg);
+            }
+            return;
+        }
+
+        m_technique = preferFsr3 ? RG_RENDER_UPSCALE_TECHNIQUE_AMD_FSR2
+                                 : RG_RENDER_UPSCALE_TECHNIQUE_AMD_FSR3;
+    }
+    else
+    {
+        m_technique = m_requestedTechnique;
+    }
+
+    // Explicitly tell the FidelityFX framework which FSR version to use,
+    // instead of letting it pick the "best" provider by itself.
+    ffxOverrideVersion overrideDesc = {};
+    overrideDesc.header.type = FFX_API_DESC_TYPE_OVERRIDE_VERSION;
+    overrideDesc.versionId   = versionId;
 
     ffxCreateBackendVKDesc backendDesc = {};
     backendDesc.header.type      = FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_VK;
@@ -180,7 +331,8 @@ void RTGL1::FSR3::OnFramebuffersSizeChange(const ResolutionState& resolutionStat
 
     ffxCreateContextDescUpscale upscaleDesc = {};
     upscaleDesc.header.type   = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE;
-    upscaleDesc.header.pNext  = &backendDesc.header;
+    upscaleDesc.header.pNext  = &overrideDesc.header;
+    overrideDesc.header.pNext = &backendDesc.header;
     upscaleDesc.flags         = FFX_UPSCALE_ENABLE_HIGH_DYNAMIC_RANGE;
     upscaleDesc.maxRenderSize  = { m_renderWidth, m_renderHeight };
     upscaleDesc.maxUpscaleSize = { m_displayWidth, m_displayHeight };
@@ -190,14 +342,29 @@ void RTGL1::FSR3::OnFramebuffersSizeChange(const ResolutionState& resolutionStat
     if (r != FFX_API_RETURN_OK)
     {
         m_context = nullptr;
-        throw RgException(RG_GRAPHICS_API_ERROR, "Failed to create FSR 3.1 context");
+        throw RgException(RG_GRAPHICS_API_ERROR, "Failed to create FSR context");
     }
 
     // Update static context for GetJitter (which is a static method)
     s_contextForJitter = m_context;
+
+    char buf[128];
+    snprintf(buf, sizeof(buf), "[FSR] context created: versionId=0x%llx (%s)\n",
+        (unsigned long long)versionId, m_technique == RG_RENDER_UPSCALE_TECHNIQUE_AMD_FSR2 ? "FSR 2" : "FSR 3.1");
+    OutputDebugStringA(buf);
 }
 
-RTGL1::FramebufferImageIndex RTGL1::FSR3::Apply(
+void RTGL1::FSR::DestroyContext()
+{
+    if (m_context)
+    {
+        ffxDestroyContext(&m_context, nullptr);
+        m_context = nullptr;
+    }
+    s_contextForJitter = nullptr;
+}
+
+RTGL1::FramebufferImageIndex RTGL1::FSR::Apply(
     VkCommandBuffer cmd, uint32_t frameIndex,
     const std::shared_ptr<Framebuffers>& framebuffers,
     const RenderResolutionHelper& renderResolution,
@@ -207,7 +374,7 @@ RTGL1::FramebufferImageIndex RTGL1::FSR3::Apply(
 {
     if (!m_context)
     {
-        OutputDebugStringA("[FSR3] Apply SKIPPED — no context\n");
+        OutputDebugStringA("[FSR] Apply SKIPPED — no context\n");
         return FB_IMAGE_INDEX_FINAL;
     }
 
@@ -255,7 +422,7 @@ RTGL1::FramebufferImageIndex RTGL1::FSR3::Apply(
     if (r != FFX_API_RETURN_OK)
     {
         char buf[128];
-        snprintf(buf, sizeof(buf), "[FSR3] ffxDispatch FAILED: r=%u\n", (unsigned)r);
+        snprintf(buf, sizeof(buf), "[FSR] ffxDispatch FAILED: r=%u\n", (unsigned)r);
         OutputDebugStringA(buf);
         return FB_IMAGE_INDEX_FINAL;
     }
@@ -269,7 +436,7 @@ RTGL1::FramebufferImageIndex RTGL1::FSR3::Apply(
         auto outRes   = ToFfxApiResource(OUTPUT_IMAGE_INDEX,              frameIndex, *framebuffers, renderResolution.GetResolutionState());
 
         char buf[384];
-        snprintf(buf, sizeof(buf), "[FSR3] frame %d | render=%ux%u upscale=%ux%u | "
+        snprintf(buf, sizeof(buf), "[FSR] frame %d | render=%ux%u upscale=%ux%u | "
             "color=%ux%u fmt=%u mv=%ux%u fmt=%u depth=%ux%u fmt=%u out=%ux%u fmt=%u | jitter=(%.4f,%.4f) dt=%.2f\n",
             frameCount,
             renderResolution.GetResolutionState().renderWidth, renderResolution.GetResolutionState().renderHeight,
@@ -288,12 +455,12 @@ RTGL1::FramebufferImageIndex RTGL1::FSR3::Apply(
     return OUTPUT_IMAGE_INDEX;
 }
 
-RgFloat2D RTGL1::FSR3::GetJitter(const ResolutionState& resolutionState, uint32_t frameId)
+RgFloat2D RTGL1::FSR::GetJitter(const ResolutionState& resolutionState, uint32_t frameId)
 {
     if (!s_contextForJitter)
     {
         static bool once = false;
-        if (!once) { OutputDebugStringA("[FSR3] GetJitter SKIPPED — no context\n"); once = true; }
+        if (!once) { OutputDebugStringA("[FSR] GetJitter SKIPPED — no context\n"); once = true; }
         return { 0, 0 };
     }
 

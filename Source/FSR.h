@@ -21,6 +21,7 @@
 #pragma once
 
 #include "Framebuffers.h"
+#include "UserFunction.h"
 
 /// Opaque FidelityFX API context handle (ffx_api/ffx_api.h: typedef void* ffxContext)
 using ffxContext = void*;
@@ -29,16 +30,19 @@ namespace RTGL1
 {
     class RenderResolutionHelper;
 
-    class FSR3 : public IFramebuffersDependency
+    class FSR : public IFramebuffersDependency
     {
     public:
-        FSR3(VkDevice device, VkPhysicalDevice physDevice);
-        ~FSR3() override;
+        FSR(VkDevice device, VkPhysicalDevice physDevice, UserPrint* pUserPrint);
+        ~FSR() override;
 
-        FSR3(const FSR3& other) = delete;
-        FSR3(FSR3&& other) noexcept = delete;
-        FSR3& operator=(const FSR3& other) = delete;
-        FSR3& operator=(FSR3&& other) noexcept = delete;
+        FSR(const FSR& other) = delete;
+        FSR(FSR&& other) noexcept = delete;
+        FSR& operator=(const FSR& other) = delete;
+        FSR& operator=(FSR&& other) noexcept = delete;
+
+        // Selects which FSR version to use. Recreates the FidelityFX context if the version changed.
+        void SetUpscaleVersion(RgRenderUpscaleTechnique technique);
 
         void OnFramebuffersSizeChange(const ResolutionState &resolutionState) override;
 
@@ -52,14 +56,30 @@ namespace RTGL1
 
         static RgFloat2D GetJitter(const ResolutionState &resolutionState, uint32_t frameId);
 
+        // Checks whether the requested FSR version (AMD_FSR2 / AMD_FSR3) is present in the FidelityFX DLL.
+        static bool IsUpscaleVersionAvailable(RgRenderUpscaleTechnique technique);
+
     private:
+        void RecreateContext();
+        void DestroyContext();
+        static uint64_t FindVersionId(bool preferFsr3);
+
         VkDevice        m_device;
         VkPhysicalDevice m_physDevice;
+        UserPrint*      m_pUserPrint;
+
         ffxContext      m_context;
+        // Version requested by the application (never changed by fallback)
+        RgRenderUpscaleTechnique m_requestedTechnique;
+        // Version actually used (may differ from requested after a fallback)
+        RgRenderUpscaleTechnique m_technique;
+
         uint32_t        m_renderWidth;
         uint32_t        m_renderHeight;
         uint32_t        m_displayWidth;
         uint32_t        m_displayHeight;
+
+        bool            m_hasSize;
 
         static inline ffxContext s_contextForJitter = nullptr;
     };

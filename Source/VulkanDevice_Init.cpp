@@ -219,9 +219,10 @@ VulkanDevice::VulkanDevice( const RgInstanceCreateInfo* info )
         uniform,
         tonemapping);
 
-    amdFsr3             = std::make_shared<FSR3>(
+    amdFsr              = std::make_shared<FSR>(
         device,
-        physDevice->Get());
+        physDevice->Get(),
+        userPrint.get());
 
     nvDlss              = std::make_shared<DLSS>(
         instance, 
@@ -288,7 +289,7 @@ VulkanDevice::VulkanDevice( const RgInstanceCreateInfo* info )
 
     framebuffers->Subscribe(rasterizer);
     framebuffers->Subscribe(decalManager);
-    framebuffers->Subscribe(amdFsr3);
+    framebuffers->Subscribe(amdFsr);
     framebuffers->Subscribe(restirBuffers);
 }
 
@@ -306,7 +307,7 @@ VulkanDevice::~VulkanDevice()
     tonemapping.reset();
     imageComposition.reset();
     bloom.reset();
-    amdFsr3.reset();
+    amdFsr.reset();
     nvDlss.reset();
     sharpening.reset();
     effectWipe.reset();

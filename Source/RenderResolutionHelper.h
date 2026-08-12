@@ -205,6 +205,8 @@ public:
     bool IsNvDlssEnabled()      const { return upscaleTechnique == RG_RENDER_UPSCALE_TECHNIQUE_NVIDIA_DLSS; }
     bool IsUpscaleEnabled()     const { return IsAmdFsr2Enabled() || IsAmdFsr3Enabled() || IsNvDlssEnabled(); }
 
+    RgRenderUpscaleTechnique GetUpscaleTechnique() const { return upscaleTechnique; }
+
     float GetAmdFsrSharpness()  const { return 1.0f; }          // 0.0 - max, 1.0 - min
     float GetNvDlssSharpness()  const { return dlssSharpness; } 
 

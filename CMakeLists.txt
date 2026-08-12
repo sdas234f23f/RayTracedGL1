@@ -200,14 +200,14 @@ endif()
 target_link_libraries(RayTracedGL1 PUBLIC Vulkan)
 target_include_directories(RayTracedGL1 PUBLIC "Include")
 
-# FSR 3.1 — prebuilt AMD-signed DLL (driver overlay requires Authenticode signature)
-message(STATUS "FSR 3.1 via prebuilt AMD-signed FidelityFX API DLL")
+# FSR 2 / FSR 3.1 — prebuilt AMD-signed DLL (driver overlay requires Authenticode signature)
+message(STATUS "FSR via prebuilt AMD-signed FidelityFX API DLL")
 add_definitions(-DRG_USE_FSR3)
 
 set(FFX_API_DIR "${CMAKE_CURRENT_SOURCE_DIR}/Source/FidelityFX_SDK_1.1.4/src")
 
 target_sources(RayTracedGL1 PRIVATE
-    "${CMAKE_CURRENT_SOURCE_DIR}/Source/FSR3.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Source/FSR.cpp"
 )
 
 target_include_directories(RayTracedGL1 PRIVATE
