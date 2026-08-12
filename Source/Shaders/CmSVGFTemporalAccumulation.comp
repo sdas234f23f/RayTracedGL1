@@ -74,7 +74,7 @@ float getSpecMinAccumFrames()
 }
 #define SPEC_MAX_HITDISTANCE_ACCUM_FRAMES 16
 #define SPEC_MIN_ACCUM_FRAMES (getSpecMinAccumFrames())
-#define SPEC_MAX_ACCUM_FRAMES 256
+#define SPEC_MAX_ACCUM_FRAMES 64
 #define SPEC_ACCUM_BASE_POWER 0.5   // [0.5, 1] greater values - less aggressive accumulation
 #define SPEC_ACCUM_CURVE      0.66  // [1 low, 0.5 high] aggressiveness of history rejection depending on viewing angle
 float getSpecAccumSpeed(float Amax, float roughness, float NoV, float parallax)
@@ -96,6 +96,119 @@ float getSpecularDominantFactor(float nv, float roughness)
     float f = pow(clamp(1.0 - nv, 0.0, 1.0), 10.8649)*(1.0 - a) + a;
 
     return clamp(f, 0.0, 1.0);
+}
+
+// -----------------------------------------------------------------------------
+// A-SVGF-style history clamping ("denoising the signal"): the accumulated
+// history is clamped to the range of the current frame's neighborhood, so that
+// transient lighting changes (e.g. a muzzle flash that has already disappeared)
+// cannot linger in the history. Taps are gated by depth/normal consistency.
+// -----------------------------------------------------------------------------
+
+bool isClampTapConsistent(const ivec2 pix, const ivec2 op, const ivec3 chRenderArea,
+                          const float depth, const vec3 normal)
+{
+    if (!testPixInRenderArea(op, chRenderArea))
+    {
+        return false;
+    }
+
+    const float depthOther = texelFetch(framebufDepthWorld_Sampler, op, 0).r;
+    const vec3 normalOther = texelFetchNormal(op);
+
+    return abs(depth - depthOther) / max(abs(depth), 0.01) < 0.1 &&
+           dot(normal, normalOther) > 0.9;
+}
+
+void getDirectClampRange(const ivec2 pix, const ivec3 chRenderArea,
+                         const float depth, const vec3 normal,
+                         out vec3 cmin, out vec3 cmax)
+{
+    cmin = texelFetchUnfilteredDirect(pix);
+    cmax = cmin;
+
+    for (int yy = -1; yy <= 1; yy++)
+    {
+        for (int xx = -1; xx <= 1; xx++)
+        {
+            if (xx == 0 && yy == 0)
+            {
+                continue;
+            }
+
+            const ivec2 op = pix + ivec2(xx, yy);
+            if (!isClampTapConsistent(pix, op, chRenderArea, depth, normal))
+            {
+                continue;
+            }
+
+            const vec3 cOther = texelFetchUnfilteredDirect(op);
+            cmin = min(cmin, cOther);
+            cmax = max(cmax, cOther);
+        }
+    }
+}
+
+void getSpecClampRange(const ivec2 pix, const ivec3 chRenderArea,
+                       const float depth, const vec3 normal,
+                       out vec3 cmin, out vec3 cmax)
+{
+    cmin = texelFetchUnfilteredSpecular(pix);
+    cmax = cmin;
+
+    for (int yy = -1; yy <= 1; yy++)
+    {
+        for (int xx = -1; xx <= 1; xx++)
+        {
+            if (xx == 0 && yy == 0)
+            {
+                continue;
+            }
+
+            const ivec2 op = pix + ivec2(xx, yy);
+            if (!isClampTapConsistent(pix, op, chRenderArea, depth, normal))
+            {
+                continue;
+            }
+
+            const vec3 cOther = texelFetchUnfilteredSpecular(op);
+            cmin = min(cmin, cOther);
+            cmax = max(cmax, cOther);
+        }
+    }
+}
+
+void getSHClampRange(const ivec2 pix, const ivec3 chRenderArea,
+                     const float depth, const vec3 normal,
+                     out SH smin, out SH smax)
+{
+    smin = texelFetchUnfilteredIndirectSH(pix);
+    smax = smin;
+
+    for (int yy = -1; yy <= 1; yy++)
+    {
+        for (int xx = -1; xx <= 1; xx++)
+        {
+            if (xx == 0 && yy == 0)
+            {
+                continue;
+            }
+
+            const ivec2 op = pix + ivec2(xx, yy);
+            if (!isClampTapConsistent(pix, op, chRenderArea, depth, normal))
+            {
+                continue;
+            }
+
+            const SH sOther = texelFetchUnfilteredIndirectSH(op);
+            smin.r = min(smin.r, sOther.r);
+            smin.g = min(smin.g, sOther.g);
+            smin.b = min(smin.b, sOther.b);
+            smax.r = max(smax.r, sOther.r);
+            smax.g = max(smax.g, sOther.g);
+            smax.b = max(smax.b, sOther.b);
+        }
+    }
 }
 
 void main()
@@ -217,6 +330,15 @@ void main()
         const float parallax = getParallax(surfPos, surfPosPrev);
         float AOnSurf = getSpecAccumSpeed(A, roughness, nv, parallax);
 
+        {
+            // clamp the specular history to the current frame's neighborhood,
+            // so a vanished flash cannot linger in the accumulated specular
+            vec3 cmin, cmax;
+            getSpecClampRange(pix, chRenderArea, depth, normal, cmin, cmax);
+            const vec3 range = cmax - cmin;
+            specPrevOnSurf = clamp(specPrevOnSurf, cmin - 0.05 * range, cmax + 0.05 * range);
+        }
+
         const vec3 specOnSurf = mix(specPrevOnSurf, unfilteredSpec, 1.0 / (1.0 + AOnSurf));
         const float hitDistOnSurf = mix(specHitDistancePrev, unfilteredRayInfo.w, 1.0 / (1.0 + AOnSurf));
 
@@ -283,6 +405,14 @@ void main()
             {
                 specPrevVirtual /= weightSumVirtual;
 
+                {
+                    // clamp the virtual-history specular the same way
+                    vec3 cmin, cmax;
+                    getSpecClampRange(pix, chRenderArea, depth, normal, cmin, cmax);
+                    const vec3 range = cmax - cmin;
+                    specPrevVirtual = clamp(specPrevVirtual, cmin - 0.05 * range, cmax + 0.05 * range);
+                }
+
                 float Avirt = getSpecAccumSpeed(A, roughness, nv, 0);
 
                 // TODO
@@ -346,6 +476,19 @@ void main()
             alphaColor   = mix(alphaColor,   1.0, antilagAlpha_Diff);
             alphaMoments = mix(alphaMoments, 1.0, antilagAlpha_Diff);
 
+            {
+                // clamp the direct-diffuse history to the current frame's
+                // neighborhood (A-SVGF), widened by the luminance sigma so
+                // legitimate noise is not crushed
+                vec3 cmin, cmax;
+                getDirectClampRange(pix, chRenderArea, depth, normal, cmin, cmax);
+
+                const float sigma = sqrt(max(0.0, moments.y - moments.x * moments.x));
+                const float widening = 2.0 * sigma;
+
+                diffPrev = clamp(diffPrev, cmin - widening, cmax + widening);
+            }
+
             diffColorAccum   = mix(diffPrev, unfilteredDiff, alphaColor);
             diffMomentsAccum = mix(momentsPrev, moments, alphaMoments);
             diffHistoryLengthAccum = diffHistoryLength;
@@ -360,6 +503,21 @@ void main()
             float alphaColor = max(minAlpha, 1.0 / indirHistoryLength);
 
             alphaColor = mix(alphaColor, 1.0, antilagAlpha_Indir);
+
+            {
+                // clamp the indirect (SH) history to the current frame's
+                // neighborhood, per component
+                SH smin, smax;
+                getSHClampRange(pix, chRenderArea, depth, normal, smin, smax);
+
+                const vec4 rangeR = smax.r - smin.r;
+                const vec4 rangeG = smax.g - smin.g;
+                const vec4 rangeB = smax.b - smin.b;
+
+                indirPrev.r = clamp(indirPrev.r, smin.r - 0.05 * rangeR, smax.r + 0.05 * rangeR);
+                indirPrev.g = clamp(indirPrev.g, smin.g - 0.05 * rangeG, smax.g + 0.05 * rangeG);
+                indirPrev.b = clamp(indirPrev.b, smin.b - 0.05 * rangeB, smax.b + 0.05 * rangeB);
+            }
 
             indirSHAccum = mixSH(indirPrev, unfilteredIndirSH, alphaColor);
             indirHistoryLengthAccum = indirHistoryLength;
