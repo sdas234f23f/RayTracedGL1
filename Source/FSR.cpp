@@ -30,8 +30,6 @@
 #include <Windows.h>
 #include <vector>
 
-#define FSR_TRACE(msg) OutputDebugStringA("[FSR] " msg "\n")
-
 namespace
 {
     void FsrMessageCallback(uint32_t type, const wchar_t* msg)
@@ -148,7 +146,6 @@ RTGL1::FSR::FSR(VkDevice _device, VkPhysicalDevice _physDevice, UserPrint* pUser
     , m_displayHeight(0)
     , m_hasSize(false)
 {
-    FSR_TRACE("Constructor");
 }
 
 RTGL1::FSR::~FSR()
@@ -193,11 +190,6 @@ void RTGL1::FSR::OnFramebuffersSizeChange(const ResolutionState& resolutionState
     m_displayHeight = resolutionState.upscaledHeight;
     m_hasSize = true;
 
-    char buf[128];
-    snprintf(buf, sizeof(buf), "[FSR] OnFramebuffersSizeChange: render=%ux%u upscale=%ux%u\n",
-        m_renderWidth, m_renderHeight, m_displayWidth, m_displayHeight);
-    OutputDebugStringA(buf);
-
     if (m_requestedTechnique == RG_RENDER_UPSCALE_TECHNIQUE_AMD_FSR2 ||
         m_requestedTechnique == RG_RENDER_UPSCALE_TECHNIQUE_AMD_FSR3)
     {
@@ -220,7 +212,6 @@ uint64_t RTGL1::FSR::FindVersionId(bool preferFsr3)
 
     if (ffxQuery(nullptr, &q.header) != FFX_API_RETURN_OK || count == 0)
     {
-        FSR_TRACE("FindVersionId: failed to enumerate versions");
         return 0;
     }
 
@@ -231,7 +222,6 @@ uint64_t RTGL1::FSR::FindVersionId(bool preferFsr3)
 
     if (ffxQuery(nullptr, &q.header) != FFX_API_RETURN_OK)
     {
-        FSR_TRACE("FindVersionId: failed to fetch versions");
         return 0;
     }
 
@@ -285,7 +275,7 @@ void RTGL1::FSR::RecreateContext()
 
     if (versionId == 0)
     {
-        // Requested version is not present in the DLL — fallback to the other one
+        // Requested version is not present in the DLL - fallback to the other one
         const char* requested = preferFsr3 ? "FSR 3.1" : "FSR 2";
         const char* fallback  = preferFsr3 ? "FSR 2" : "FSR 3.1";
 
@@ -348,10 +338,23 @@ void RTGL1::FSR::RecreateContext()
     // Update static context for GetJitter (which is a static method)
     s_contextForJitter = m_context;
 
-    char buf[128];
-    snprintf(buf, sizeof(buf), "[FSR] context created: versionId=0x%llx (%s)\n",
-        (unsigned long long)versionId, m_technique == RG_RENDER_UPSCALE_TECHNIQUE_AMD_FSR2 ? "FSR 2" : "FSR 3.1");
+    // Query the provider that the DLL actually attached to this context -
+    // verifies that the requested FSR version was really selected.
+    ffxQueryGetProviderVersion pv = {};
+    pv.header.type = FFX_API_QUERY_DESC_TYPE_GET_PROVIDER_VERSION;
+    ffxQuery(&m_context, &pv.header);
+
+    const char* requestedName = m_technique == RG_RENDER_UPSCALE_TECHNIQUE_AMD_FSR2 ? "FSR 2" : "FSR 3.1";
+
+    char buf[256];
+    snprintf(buf, sizeof(buf), "FSR: requested %s, provider \"%s\" (id=0x%llx)",
+        requestedName, pv.versionName ? pv.versionName : "unknown",
+        (unsigned long long)pv.versionId);
     OutputDebugStringA(buf);
+    if (m_pUserPrint)
+    {
+        m_pUserPrint->Print(buf);
+    }
 }
 
 void RTGL1::FSR::DestroyContext()
@@ -374,7 +377,12 @@ RTGL1::FramebufferImageIndex RTGL1::FSR::Apply(
 {
     if (!m_context)
     {
-        OutputDebugStringA("[FSR] Apply SKIPPED — no context\n");
+        static bool logged = false;
+        if (!logged)
+        {
+            logged = true;
+            OutputDebugStringA("[FSR] Apply SKIPPED - no context\n");
+        }
         return FB_IMAGE_INDEX_FINAL;
     }
 
@@ -427,29 +435,6 @@ RTGL1::FramebufferImageIndex RTGL1::FSR::Apply(
         return FB_IMAGE_INDEX_FINAL;
     }
 
-    static int frameCount = 0;
-    if (++frameCount % 60 == 1)
-    {
-        auto colorRes = ToFfxApiResource(FI::FB_IMAGE_INDEX_FINAL,       frameIndex, *framebuffers, renderResolution.GetResolutionState());
-        auto depthRes = ToFfxApiResource(FI::FB_IMAGE_INDEX_DEPTH_NDC,   frameIndex, *framebuffers, renderResolution.GetResolutionState());
-        auto mvRes    = ToFfxApiResource(FI::FB_IMAGE_INDEX_MOTION_DLSS, frameIndex, *framebuffers, renderResolution.GetResolutionState());
-        auto outRes   = ToFfxApiResource(OUTPUT_IMAGE_INDEX,              frameIndex, *framebuffers, renderResolution.GetResolutionState());
-
-        char buf[384];
-        snprintf(buf, sizeof(buf), "[FSR] frame %d | render=%ux%u upscale=%ux%u | "
-            "color=%ux%u fmt=%u mv=%ux%u fmt=%u depth=%ux%u fmt=%u out=%ux%u fmt=%u | jitter=(%.4f,%.4f) dt=%.2f\n",
-            frameCount,
-            renderResolution.GetResolutionState().renderWidth, renderResolution.GetResolutionState().renderHeight,
-            m_displayWidth, m_displayHeight,
-            colorRes.description.width, colorRes.description.height, (unsigned)colorRes.description.format,
-            mvRes.description.width, mvRes.description.height, (unsigned)mvRes.description.format,
-            depthRes.description.width, depthRes.description.height, (unsigned)depthRes.description.format,
-            outRes.description.width, outRes.description.height, (unsigned)outRes.description.format,
-            jitterOffset.data[0], jitterOffset.data[1],
-            timeDelta);
-        OutputDebugStringA(buf);
-    }
-
     InsertBarriers(cmd, frameIndex, *framebuffers, rs, true);
 
     return OUTPUT_IMAGE_INDEX;
@@ -459,8 +444,12 @@ RgFloat2D RTGL1::FSR::GetJitter(const ResolutionState& resolutionState, uint32_t
 {
     if (!s_contextForJitter)
     {
-        static bool once = false;
-        if (!once) { OutputDebugStringA("[FSR] GetJitter SKIPPED — no context\n"); once = true; }
+        static bool logged = false;
+        if (!logged)
+        {
+            logged = true;
+            OutputDebugStringA("[FSR] GetJitter SKIPPED - no context\n");
+        }
         return { 0, 0 };
     }
 
