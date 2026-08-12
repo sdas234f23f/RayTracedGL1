@@ -660,7 +660,7 @@ static void MainLoop( RgInstance instance, std::string_view gltfPath )
             };
 
             RgDrawFrameRenderResolutionParams resolutionParams = {
-                .upscaleTechnique = RG_RENDER_UPSCALE_TECHNIQUE_AMD_FSR2,
+                .upscaleTechnique = RG_RENDER_UPSCALE_TECHNIQUE_AMD_FSR3,
                 .resolutionMode   = RG_RENDER_RESOLUTION_MODE_BALANCED,
             };
 

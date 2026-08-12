@@ -6,6 +6,28 @@ RTGL1 is a library that simplifies the process of porting applications with fixe
 
 It's achievable with hardware accelerated ray tracing, low sample per pixel count and utilizing denoising algorithms to improve the image quality by aggressively reusing spatio-temporal data.
 
+## Changelog (quake-fsr31-support)
+
+### Added
+- **AMD FSR 3.1 upscaler** via FidelityFX SDK 1.1.4 (`ffxCreateContext` / `ffxDispatch` / `ffxQuery` API)
+- `RG_RENDER_UPSCALE_TECHNIQUE_AMD_FSR3` — new public enum value for FSR 3.1
+- `RG_RENDER_UPSCALE_TECHNIQUE_AMD_FSR31` — explicit FSR 3.1 alias (replaced by `AMD_FSR3`)
+- `RG_RENDER_RESOLUTION_MODE_NATIVE_AA` — Native AA mode (render at 1.0x, FSR 3.1 anti-aliasing only)
+- AMD-signed prebuilt `amd_fidelityfx_vk.dll` required at runtime (driver overlay detection depends on Authenticode signature)
+
+### Changed
+- FSR 3.1 is always enabled (no compile-time flag; `RG_USE_FSR3` is unconditional)
+- `RG_RENDER_UPSCALE_TECHNIQUE_AMD_FSR2` is kept as a legacy alias — all FSR paths now use FSR 3.1 internally
+
+### Removed
+- Old FSR2 code (`Source/FSR2.cpp`, `Source/FSR2.h`)
+- `RG_WITH_FSR3` CMake option — FSR 3.1 is always built-in
+- `RG_RENDER_UPSCALE_TECHNIQUE_AMD_FSR31` — consolidated into `AMD_FSR3`
+
+### Fixed
+- Missing `VK_KHR_get_memory_requirements2` device extension (caused crash in `ffxCreateContext`)
+- DLL digital signature required by AMD driver overlay for FSR detection
+
 
 ## Build
 1. Requirements:
