@@ -219,7 +219,7 @@ VulkanDevice::VulkanDevice( const RgInstanceCreateInfo* info )
         uniform,
         tonemapping);
 
-    amdFsr2             = std::make_shared<FSR2>(
+    amdFsr3             = std::make_shared<FSR3>(
         device,
         physDevice->Get());
 
@@ -288,7 +288,7 @@ VulkanDevice::VulkanDevice( const RgInstanceCreateInfo* info )
 
     framebuffers->Subscribe(rasterizer);
     framebuffers->Subscribe(decalManager);
-    framebuffers->Subscribe(amdFsr2);
+    framebuffers->Subscribe(amdFsr3);
     framebuffers->Subscribe(restirBuffers);
 }
 
@@ -306,7 +306,7 @@ VulkanDevice::~VulkanDevice()
     tonemapping.reset();
     imageComposition.reset();
     bloom.reset();
-    amdFsr2.reset();
+    amdFsr3.reset();
     nvDlss.reset();
     sharpening.reset();
     effectWipe.reset();
@@ -468,7 +468,7 @@ void VulkanDevice::CreateInstance(const RgInstanceCreateInfo &info)
 
 
     VkApplicationInfo appInfo = {};
-    appInfo.apiVersion = VK_API_VERSION_1_2;
+    appInfo.apiVersion = VK_API_VERSION_1_3;
     appInfo.pApplicationName = info.pAppName;
 
     VkInstanceCreateInfo instanceInfo = {};
@@ -572,6 +572,14 @@ void VulkanDevice::CreateDevice()
     vulkan12Features.shaderFloat16 = 1;
     vulkan12Features.drawIndirectCount = 1;
 
+    VkPhysicalDeviceVulkan13Features vulkan13Features = {};
+    vulkan13Features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
+    vulkan13Features.pNext = nullptr; // end of chain
+    vulkan13Features.computeFullSubgroups = 1;
+    vulkan13Features.subgroupSizeControl = 1;
+
+    vulkan12Features.pNext = &vulkan13Features;  // chain: vk12 → vk13
+
     VkPhysicalDeviceMultiviewFeatures multiviewFeatures = {};
     multiviewFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTIVIEW_FEATURES;
     multiviewFeatures.pNext = &vulkan12Features;
@@ -619,6 +627,9 @@ void VulkanDevice::CreateDevice()
         VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME,
         VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME,
         VK_KHR_SHADER_FLOAT16_INT8_EXTENSION_NAME,
+        VK_KHR_GET_MEMORY_REQUIREMENTS_2_EXTENSION_NAME,         // FSR 3.1 needs vkGetBufferMemoryRequirements2KHR
+        VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME,             // FSR 3.1 shader subgroup size
+        VK_KHR_SHADER_FLOAT_CONTROLS_EXTENSION_NAME,             // FSR 3.1 shader FP ops
     };
 
     for (const char *n : DLSS::GetDlssVulkanDeviceExtensions())

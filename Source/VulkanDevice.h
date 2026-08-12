@@ -51,7 +51,7 @@
 #include "EffectWipe.h"
 #include "EffectSimple_Instances.h"
 #include "LightGrid.h"
-#include "FSR2.h"
+#include "FSR3.h"
 #include "FrameState.h"
 #include "LibraryConfig.h"
 #include "PortalList.h"
@@ -173,7 +173,7 @@ private:
     std::shared_ptr<Tonemapping>            tonemapping;
     std::shared_ptr<ImageComposition>       imageComposition;
     std::shared_ptr<Bloom>                  bloom;
-    std::shared_ptr<FSR2>                   amdFsr2;
+    std::shared_ptr<FSR3>                   amdFsr3;
     std::shared_ptr<DLSS>                   nvDlss;
     std::shared_ptr<Sharpening>             sharpening;
     std::shared_ptr<EffectWipe>                 effectWipe;

@@ -176,7 +176,7 @@ void VulkanDevice::FillUniform(ShGlobalUniform *gu, const RgDrawFrameInfo &drawI
         gu->upscaledRenderHeight = static_cast< float >( renderResolution.UpscaledHeight() );
 
         RgFloat2D jitter = renderResolution.IsNvDlssEnabled() ? HaltonSequence::GetJitter_Halton23( frameId ) :
-                           renderResolution.IsAmdFsr2Enabled() ? FSR2::GetJitter( renderResolution.GetResolutionState(), frameId ) :
+                           (renderResolution.IsAmdFsr2Enabled() || renderResolution.IsAmdFsr3Enabled()) ? FSR3::GetJitter( renderResolution.GetResolutionState(), frameId ) :
                            RgFloat2D{ 0, 0 };
 
         gu->jitterX = jitter.data[ 0 ];
@@ -704,9 +704,9 @@ void VulkanDevice::Render(VkCommandBuffer cmd, const RgDrawFrameInfo &drawInfo)
                                                renderResolution, 
                                                jitter);
         }
-        else if (renderResolution.IsAmdFsr2Enabled())
+        else if (renderResolution.IsAmdFsr2Enabled() || renderResolution.IsAmdFsr3Enabled())
         {
-            accum = amdFsr2->Apply(cmd, frameIndex, 
+            accum = amdFsr3->Apply(cmd, frameIndex, 
                                                 framebuffers, 
                                                 renderResolution, 
                                                 jitter, 
@@ -888,6 +888,7 @@ bool RTGL1::VulkanDevice::IsRenderUpscaleTechniqueAvailable(RgRenderUpscaleTechn
         case RG_RENDER_UPSCALE_TECHNIQUE_NEAREST:
         case RG_RENDER_UPSCALE_TECHNIQUE_LINEAR:
         case RG_RENDER_UPSCALE_TECHNIQUE_AMD_FSR2:
+        case RG_RENDER_UPSCALE_TECHNIQUE_AMD_FSR3:
             return true;
         case RG_RENDER_UPSCALE_TECHNIQUE_NVIDIA_DLSS:
             return nvDlss->IsDlssAvailable();

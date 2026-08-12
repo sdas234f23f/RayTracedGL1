@@ -78,7 +78,6 @@ set(Sources
     "Source/DecalManager.cpp"
     "Source/EffectBase.cpp"
     "Source/LightGrid.cpp"
-    "Source/FSR2.cpp"
     "Source/Stb/stb_image.cpp"
     "Source/ImageLoaderDev.cpp"
     "Source/PortalList.cpp"
@@ -201,18 +200,30 @@ endif()
 target_link_libraries(RayTracedGL1 PUBLIC Vulkan)
 target_include_directories(RayTracedGL1 PUBLIC "Include")
 
-# FSR2
-target_include_directories(RayTracedGL1 PRIVATE "Source/FSR2/include" )
+# FSR 3.1 — prebuilt AMD-signed DLL (driver overlay requires Authenticode signature)
+message(STATUS "FSR 3.1 via prebuilt AMD-signed FidelityFX API DLL")
+add_definitions(-DRG_USE_FSR3)
+
+set(FFX_API_DIR "${CMAKE_CURRENT_SOURCE_DIR}/Source/FidelityFX_SDK_1.1.4/src")
+
+target_sources(RayTracedGL1 PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/Source/FSR3.cpp"
+)
+
+target_include_directories(RayTracedGL1 PRIVATE
+    "${FFX_API_DIR}/ffx-api/include"
+)
+
 if (WIN32)
-    if (BUILD_TYPE STREQUAL "DEBUG")
-        target_link_libraries(RayTracedGL1 PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Source/FSR2/win32/ffx_fsr2_api_x64d.lib" )
-        target_link_libraries(RayTracedGL1 PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Source/FSR2/win32/ffx_fsr2_api_vk_x64d.lib" )
-    else()
-        target_link_libraries(RayTracedGL1 PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Source/FSR2/win32/ffx_fsr2_api_x64.lib" )
-        target_link_libraries(RayTracedGL1 PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Source/FSR2/win32/ffx_fsr2_api_vk_x64.lib" )
-    endif()
-else()
-    message(FATAL_ERROR "On non-WIN32, please, provide static libraries of FSR2 or disable FSR2")
+    target_link_libraries(RayTracedGL1 PRIVATE
+        "${FFX_API_DIR}/PrebuiltSignedDLL/amd_fidelityfx_vk.lib"
+    )
+    add_custom_command(TARGET RayTracedGL1 POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${FFX_API_DIR}/PrebuiltSignedDLL/amd_fidelityfx_vk.dll"
+            "$<TARGET_FILE_DIR:RayTracedGL1>"
+        COMMENT "Copying amd_fidelityfx_vk.dll (AMD-signed) to build output"
+    )
 endif()
 
 

@@ -963,7 +963,7 @@ typedef struct RgDrawFrameVolumetricParams
     // Volumetric directional light source parameters.
     RgFloat3D   sourceColor;
     RgFloat3D   sourceDirection;
-    // g parameter [-1..1] for the Henyey–Greenstein phase function.
+    // g parameter [-1..1] for the Henyeyï¿½Greenstein phase function.
     // Default: 0.0 (isotropic)
     float       sourceAssymetry;
 } RgDrawFrameVolumetricParams;
@@ -1102,6 +1102,7 @@ typedef enum RgRenderUpscaleTechnique
     RG_RENDER_UPSCALE_TECHNIQUE_LINEAR,
     RG_RENDER_UPSCALE_TECHNIQUE_NEAREST,
     RG_RENDER_UPSCALE_TECHNIQUE_AMD_FSR2,
+    RG_RENDER_UPSCALE_TECHNIQUE_AMD_FSR3,
     RG_RENDER_UPSCALE_TECHNIQUE_NVIDIA_DLSS,
 } RgRenderUpscaleTechnique;
 
@@ -1120,6 +1121,7 @@ typedef enum RgRenderResolutionMode
     RG_RENDER_RESOLUTION_MODE_BALANCED,
     RG_RENDER_RESOLUTION_MODE_QUALITY,
     RG_RENDER_RESOLUTION_MODE_ULTRA_QUALITY,    // with AMD_FSR, same as QUALITY
+    RG_RENDER_RESOLUTION_MODE_NATIVE_AA,        // FSR3.1 Native AA (1.0x ratio, anti-aliasing only)
 } RgRenderResolutionMode;
 
 typedef struct RgDrawFrameRenderResolutionParams
