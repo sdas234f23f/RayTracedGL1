@@ -11,7 +11,6 @@ It's achievable with hardware accelerated ray tracing, low sample per pixel coun
 ### Added
 - **AMD FSR 3.1 upscaler** via FidelityFX SDK 1.1.4 (`ffxCreateContext` / `ffxDispatch` / `ffxQuery` API)
 - `RG_RENDER_UPSCALE_TECHNIQUE_AMD_FSR3` — new public enum value for FSR 3.1
-- `RG_RENDER_UPSCALE_TECHNIQUE_AMD_FSR31` — explicit FSR 3.1 alias (replaced by `AMD_FSR3`)
 - `RG_RENDER_RESOLUTION_MODE_NATIVE_AA` — Native AA mode (render at 1.0x, FSR 3.1 anti-aliasing only)
 - AMD-signed prebuilt `amd_fidelityfx_vk.dll` required at runtime (driver overlay detection depends on Authenticode signature)
 
@@ -22,7 +21,6 @@ It's achievable with hardware accelerated ray tracing, low sample per pixel coun
 ### Removed
 - Old FSR2 code (`Source/FSR2.cpp`, `Source/FSR2.h`)
 - `RG_WITH_FSR3` CMake option — FSR 3.1 is always built-in
-- `RG_RENDER_UPSCALE_TECHNIQUE_AMD_FSR31` — consolidated into `AMD_FSR3`
 
 ### Fixed
 - Missing `VK_KHR_get_memory_requirements2` device extension (caused crash in `ffxCreateContext`)
