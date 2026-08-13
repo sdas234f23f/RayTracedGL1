@@ -222,6 +222,9 @@ CONST_TO_EVALUATE = "CONST VALUE MUST BE EVALUATED"
 GRADIENT_ESTIMATION_ENABLED = True
 FRAMEBUF_IGNORE_ATTACHMENTS_DEFINE = "FRAMEBUF_IGNORE_ATTACHMENTS" # define this, to not specify framebufs that are used as attachments
 
+# Q2RTX-style fog volumes (matches RG_MAX_FOG_VOLUMES in RTGL1.h)
+MAX_FOG_VOLUMES = 8
+
 CONST = {
     "MAX_STATIC_VERTEX_COUNT"               : 1 << 20,
     "MAX_DYNAMIC_VERTEX_COUNT"              : 1 << 21,
@@ -375,6 +378,7 @@ CONST = {
     "COMPUTE_SVGF_TEMPORAL_GROUP_SIZE_X"    : 16,
     "COMPUTE_SVGF_VARIANCE_GROUP_SIZE_X"    : 16,
     "COMPUTE_SVGF_ATROUS_GROUP_SIZE_X"      : 16,
+    "MAX_FOG_VOLUMES"                       : MAX_FOG_VOLUMES,
     "COMPUTE_SVGF_ATROUS_ITERATION_COUNT"   : 4,
 
     "COMPUTE_ASVGF_STRATA_SIZE"                         : 3,
@@ -613,6 +617,15 @@ GLOBAL_UNIFORM_STRUCT = [
     (TYPE_INT32,        4,      "instanceGeomCount",            align4(CONST["MAX_TOP_LEVEL_INSTANCE_COUNT"]) // 4),
     (TYPE_FLOAT32,     44,      "viewProjCubemap",              6),
     (TYPE_FLOAT32,     44,      "skyCubemapRotationTransform",  1),
+
+    # Q2RTX-style fog volumes (see RgFogVolume). Flat arrays, std140.
+    # fogMins/fogMaxs/fogColor are vec4 (xyz + pad), fogDensity is vec4 (a,b,c,const),
+    # fogIsActive is a uint per volume.
+    (TYPE_FLOAT32,      4,      "fogMins",                  MAX_FOG_VOLUMES),
+    (TYPE_UINT32,       1,      "fogIsActive",              MAX_FOG_VOLUMES),
+    (TYPE_FLOAT32,      4,      "fogMaxs",                  MAX_FOG_VOLUMES),
+    (TYPE_FLOAT32,      4,      "fogColor",                 MAX_FOG_VOLUMES),
+    (TYPE_FLOAT32,      4,      "fogDensity",               MAX_FOG_VOLUMES),
 ]
 
 GEOM_INSTANCE_STRUCT = [
@@ -1012,7 +1025,13 @@ def getStruct(name, definition, typeNames, alignmentType, breakType):
             #    raise Exception("If count > 1, dimensions must be in [1..4]")
             if breakType == STRUCT_BREAK_TYPE_COMPLEX or (typeNames == C_TYPE_NAMES and breakType == STRUCT_BREAK_TYPE_ONLY_C):
                 if dim <= 4:
-                    r += "%s %s[%d]" % (typeNames[baseType], mname, align4(count * dim))
+                    if alignmentType == STRUCT_ALIGNMENT_STD140:
+                        # std140: every element of an array of scalars or vectors is
+                        # aligned to 16 bytes, so each element occupies 4 C scalars
+                        # (e.g. `uint arr[8]` -> `uint32_t arr[32]` in C).
+                        r += "%s %s[%d]" % (typeNames[baseType], mname, align4(count * 4))
+                    else:
+                        r += "%s %s[%d]" % (typeNames[baseType], mname, align4(count * dim))
                 else:
                     r += "%s %s[%d]" % (typeNames[baseType], mname, align4(count * int(TYPE_ACTUAL_SIZES[(baseType, dim)] / 4)))
             else:

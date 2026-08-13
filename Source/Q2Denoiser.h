@@ -59,6 +59,11 @@ public:
         VkCommandBuffer cmd, uint32_t frameIndex,
         const std::shared_ptr<const GlobalUniform> &uniform);
 
+    // Q2RTX-style fog volumes: blends the final HDR image toward the fog color.
+    void ApplyFog(
+        VkCommandBuffer cmd, uint32_t frameIndex,
+        const std::shared_ptr<const GlobalUniform> &uniform);
+
     void OnShaderReload(const ShaderManager *shaderManager) override;
 
 private:
@@ -81,6 +86,7 @@ private:
     VkPipeline atrousLF[4];
     VkPipeline atrous[4];
     VkPipeline interleave;
+    VkPipeline fog;
     VkPipeline taau;
 };
 

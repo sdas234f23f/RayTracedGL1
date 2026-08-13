@@ -77,6 +77,7 @@ static ShaderModuleDefinition G_SHADERS[] =
     {"CQ2AtrousLF",             "CmQ2AtrousLF.comp.spv"                },
     {"CQ2Atrous",               "CmQ2Atrous.comp.spv"                  },
     {"CQ2Interleave",           "CmQ2Interleave.comp.spv"              },
+    {"CQ2Fog",                  "CmQ2Fog.comp.spv"                     },
     {"CQ2TAAU",                 "CmQ2TAAU.comp.spv"                    },
     {"CBloomDownsample",        "CmBloomDownsample.comp.spv"           },
     {"CBloomUpsample",          "CmBloomUpsample.comp.spv"             },

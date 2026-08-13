@@ -42,6 +42,7 @@ Q2Denoiser::Q2Denoiser(
     atrousLF{},
     atrous{},
     interleave(VK_NULL_HANDLE),
+    fog(VK_NULL_HANDLE),
     taau(VK_NULL_HANDLE)
 {
     static_assert(sizeof(atrous) / sizeof(VkPipeline) == COMPUTE_SVGF_ATROUS_ITERATION_COUNT, "Wrong atrous pipeline count");
@@ -223,6 +224,18 @@ void Q2Denoiser::CreatePipelines(const ShaderManager *shaderManager)
         VkComputePipelineCreateInfo plInfo = {};
         plInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
         plInfo.layout = pipelineLayout;
+        plInfo.stage = shaderManager->GetStageInfo("CQ2Fog");
+
+        r = vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &plInfo, nullptr, &fog);
+        VK_CHECKERROR(r);
+
+        SET_DEBUG_NAME(device, fog, VK_OBJECT_TYPE_PIPELINE, "Q2 fog volumes pipeline");
+    }
+
+    {
+        VkComputePipelineCreateInfo plInfo = {};
+        plInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+        plInfo.layout = pipelineLayout;
         plInfo.stage = shaderManager->GetStageInfo("CQ2TAAU");
 
         r = vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &plInfo, nullptr, &taau);
@@ -237,6 +250,7 @@ void Q2Denoiser::DestroyPipelines()
     vkDestroyPipeline(device, adapter, nullptr);
     vkDestroyPipeline(device, temporal, nullptr);
     vkDestroyPipeline(device, interleave, nullptr);
+    vkDestroyPipeline(device, fog, nullptr);
     vkDestroyPipeline(device, taau, nullptr);
 
     for (VkPipeline &p : gradientAtrous)
@@ -260,6 +274,7 @@ void Q2Denoiser::DestroyPipelines()
     adapter = VK_NULL_HANDLE;
     temporal = VK_NULL_HANDLE;
     interleave = VK_NULL_HANDLE;
+    fog = VK_NULL_HANDLE;
     taau = VK_NULL_HANDLE;
 }
 
@@ -493,5 +508,38 @@ void Q2Denoiser::ApplyTAAU(
     const uint32_t wgY = Utils::GetWorkGroupCount(uniform->GetData()->upscaledRenderHeight, 16);
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, taau);
+    vkCmdDispatch(cmd, wgX, wgY, 1);
+}
+
+void Q2Denoiser::ApplyFog(
+    VkCommandBuffer cmd, uint32_t frameIndex,
+    const std::shared_ptr<const GlobalUniform> &uniform)
+{
+    typedef FramebufferImageIndex FI;
+
+    VkDescriptorSet sets[] =
+    {
+        framebuffers->GetDescSet(frameIndex),
+        uniform->GetDescSet(frameIndex)
+    };
+
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                        pipelineLayout,
+                        0, std::size(sets), sets,
+                        0, nullptr);
+
+    CmdLabel label(cmd, "Q2 fog volumes");
+
+    FI fs[] =
+    {
+        FI::FB_IMAGE_INDEX_FINAL,
+        FI::FB_IMAGE_INDEX_DEPTH_WORLD,
+    };
+    framebuffers->BarrierMultiple(cmd, frameIndex, fs);
+
+    const uint32_t wgX = Utils::GetWorkGroupCount(uniform->GetData()->renderWidth, 16);
+    const uint32_t wgY = Utils::GetWorkGroupCount(uniform->GetData()->renderHeight, 16);
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, fog);
     vkCmdDispatch(cmd, wgX, wgY, 1);
 }

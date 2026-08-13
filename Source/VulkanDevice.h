@@ -22,6 +22,7 @@
 
 #include <RTGL1/RTGL1.h>
 
+#include <array>
 #include <memory>
 #include <optional>
 
@@ -95,6 +96,9 @@ public:
     void UploadSphericalLight(const RgSphericalLightUploadInfo *pLightInfo);
     void UploadSpotlight(const RgSpotLightUploadInfo *pLightInfo);
     void UploadPolygonalLight(const RgPolygonalLightUploadInfo *pLightInfo);
+
+    // Q2RTX-style fog volumes (used by the new Q2RTX core path)
+    void SetFogVolumes(uint32_t count, const RgFogVolume *pVolumes);
 
     void CreateMaterial(const RgMaterialCreateInfo *pCreateInfo, RgMaterial *pResult);
     void CreateAnimatedMaterial(const RgAnimatedMaterialCreateInfo *pCreateInfo, RgMaterial *pResult);
@@ -204,6 +208,10 @@ private:
     VkDebugUtilsMessengerEXT                debugMessenger;
     std::unique_ptr<UserPrint>              userPrint;
     std::shared_ptr<UserFileLoad>           userFileLoad;
+
+    // Q2RTX-style fog volumes (host data, uploaded into the uniform each frame)
+    std::array<RgFogVolume, RG_MAX_FOG_VOLUMES> fogVolumes{};
+    uint32_t                                    fogVolumeCount = 0;
 
     bool                                    rayCullBackFacingTriangles;
     bool                                    allowGeometryWithSkyFlag;

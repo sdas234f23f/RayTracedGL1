@@ -974,6 +974,24 @@ typedef struct RgDrawFrameVolumetricParams
     float       sourceAssymetry;
 } RgDrawFrameVolumetricParams;
 
+// Maximum number of Q2RTX-style fog volumes (matches MAX_FOG_VOLUMES in the renderer).
+#define RG_MAX_FOG_VOLUMES 8
+
+typedef struct RgFogVolume
+{
+    // Two points on any diagonal of the axis-aligned fog box.
+    RgFloat3D   pointA;
+    RgFloat3D   pointB;
+    // Fog color.
+    RgFloat3D   color;
+    // Distance at which objects inside the fog are 50% visible.
+    // Non-positive value disables the volume.
+    float       halfExtinctionDistance;
+    // Density gradient face: 0 = none (uniform fog),
+    // 1..6 = xa, xb, ya, yb, za, zb (density is zero on that face).
+    uint32_t    softface;
+} RgFogVolume;
+
 typedef struct RgDrawFrameBloomParams
 {
     // Negative value disables bloom pass
@@ -1212,6 +1230,13 @@ typedef struct RgDrawFrameInfo
 RGAPI RgResult RGCONV rgDrawFrame(
     RgInstance                          rgInstance,
     const RgDrawFrameInfo               *pDrawInfo);
+
+// Set Q2RTX-style fog volumes (up to RG_MAX_FOG_VOLUMES). Used by the new
+// Q2RTX core path. A zero count disables all fog volumes.
+RGAPI RgResult RGCONV rgSetFogVolumes(
+    RgInstance                          rgInstance,
+    uint32_t                            count,
+    const RgFogVolume                   *pVolumes);
 
 
 

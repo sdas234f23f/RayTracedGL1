@@ -269,6 +269,11 @@ RgResult rgDrawFrame(RgInstance rgInstance, const RgDrawFrameInfo *pDrawInfo)
     return Call(rgInstance, &VulkanDevice::DrawFrame, pDrawInfo);
 }
 
+RgResult rgSetFogVolumes(RgInstance rgInstance, uint32_t count, const RgFogVolume *pVolumes)
+{
+    return Call(rgInstance, &VulkanDevice::SetFogVolumes, count, pVolumes);
+}
+
 RgBool32 rgIsRenderUpscaleTechniqueAvailable(RgInstance rgInstance, RgRenderUpscaleTechnique technique)
 {
     return Call(rgInstance, &VulkanDevice::IsRenderUpscaleTechniqueAvailable, technique);

@@ -139,6 +139,7 @@ namespace RTGL1
 #define COMPUTE_SVGF_TEMPORAL_GROUP_SIZE_X (16)
 #define COMPUTE_SVGF_VARIANCE_GROUP_SIZE_X (16)
 #define COMPUTE_SVGF_ATROUS_GROUP_SIZE_X (16)
+#define MAX_FOG_VOLUMES (8)
 #define COMPUTE_SVGF_ATROUS_ITERATION_COUNT (4)
 #define COMPUTE_ASVGF_STRATA_SIZE (3)
 #define COMPUTE_ASVGF_GRADIENT_ATROUS_ITERATION_COUNT (4)
@@ -292,6 +293,11 @@ struct ShGlobalUniform
     int32_t instanceGeomCount[48];
     float viewProjCubemap[96];
     float skyCubemapRotationTransform[16];
+    float fogMins[32];
+    uint32_t fogIsActive[32];
+    float fogMaxs[32];
+    float fogColor[32];
+    float fogDensity[32];
 };
 
 struct ShGeometryInstance

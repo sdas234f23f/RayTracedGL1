@@ -582,6 +582,70 @@ void VulkanDevice::FillUniform(ShGlobalUniform *gu, const RgDrawFrameInfo &drawI
     }
 
     gu->antiFireflyEnabled = !!drawInfo.forceAntiFirefly;
+
+    // Q2RTX-style fog volumes (host data set via rgSetFogVolumes)
+    {
+        for (uint32_t i = 0; i < MAX_FOG_VOLUMES; i++)
+        {
+            // std140: scalar arrays have 16-byte element stride
+            gu->fogIsActive[i * 4] = 0;
+        }
+
+        for (uint32_t i = 0; i < fogVolumeCount; i++)
+        {
+            const RgFogVolume &v = fogVolumes[i];
+
+            if (v.halfExtinctionDistance <= 0.0f ||
+                v.pointA.data[0] == v.pointB.data[0] ||
+                v.pointA.data[1] == v.pointB.data[1] ||
+                v.pointA.data[2] == v.pointB.data[2])
+            {
+                continue;
+            }
+
+            const float *pa = v.pointA.data;
+            const float *pb = v.pointB.data;
+
+            for (int axis = 0; axis < 3; axis++)
+            {
+                gu->fogMins[i * 4 + axis] = std::min(pa[axis], pb[axis]);
+                gu->fogMaxs[i * 4 + axis] = std::max(pa[axis], pb[axis]);
+            }
+            gu->fogMins[i * 4 + 3] = 0.0f;
+            gu->fogMaxs[i * 4 + 3] = 0.0f;
+
+            gu->fogColor[i * 4 + 0] = v.color.data[0];
+            gu->fogColor[i * 4 + 1] = v.color.data[1];
+            gu->fogColor[i * 4 + 2] = v.color.data[2];
+            gu->fogColor[i * 4 + 3] = 0.0f;
+
+            // exp(-kx) = 0.5  =>  k = -ln(0.5) / x
+            const float density = 0.69315f / v.halfExtinctionDistance;
+
+            gu->fogDensity[i * 4 + 0] = 0.0f;
+            gu->fogDensity[i * 4 + 1] = 0.0f;
+            gu->fogDensity[i * 4 + 2] = 0.0f;
+
+            if (1 <= v.softface && v.softface <= 6)
+            {
+                // linear density gradient along one axis (zero on the soft face)
+                const int axis = (v.softface - 1) / 2;
+                const float pos0 = (v.softface & 1) ? pa[axis] : pb[axis];
+                const float pos1 = (v.softface & 1) ? pb[axis] : pa[axis];
+                const float a = density / (pos1 - pos0);
+                const float b = -pos0 * a;
+                gu->fogDensity[i * 4 + axis] = a;
+                gu->fogDensity[i * 4 + 3] = b;
+            }
+            else
+            {
+                gu->fogDensity[i * 4 + 3] = density;
+            }
+
+            // std140: scalar arrays have 16-byte element stride
+            gu->fogIsActive[i * 4] = 1;
+        }
+    }
 }
 
 void VulkanDevice::Render(VkCommandBuffer cmd, const RgDrawFrameInfo &drawInfo)
@@ -822,6 +886,13 @@ void VulkanDevice::Render(VkCommandBuffer cmd, const RgDrawFrameInfo &drawInfo)
             jitter,
             renderResolution,
             drawInfo.pLensFlareParams );
+    }
+
+    // Q2RTX-style fog volumes (blended in HDR, before tonemapping).
+    // Works on both the legacy and the new Q2RTX core path.
+    if (fogVolumeCount > 0)
+    {
+        q2Denoiser->ApplyFog(cmd, frameIndex, uniform);
     }
 
     imageComposition->Finalize(
@@ -1285,6 +1356,24 @@ void RTGL1::VulkanDevice::UploadPolygonalLight(const RgPolygonalLightUploadInfo 
     }
 
     scene->UploadLight(currentFrameState.GetFrameIndex(), *pLightInfo);
+}
+
+void VulkanDevice::SetFogVolumes(uint32_t count, const RgFogVolume *pVolumes)
+{
+    if (count == 0 || pVolumes == nullptr)
+    {
+        fogVolumeCount = 0;
+        fogVolumes = {};
+        return;
+    }
+
+    count = std::min(count, static_cast<uint32_t>(RG_MAX_FOG_VOLUMES));
+
+    for (uint32_t i = 0; i < count; i++)
+    {
+        fogVolumes[i] = pVolumes[i];
+    }
+    fogVolumeCount = count;
 }
 
 void VulkanDevice::CreateMaterial(const RgMaterialCreateInfo *createInfo, RgMaterial *result)

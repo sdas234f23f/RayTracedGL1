@@ -132,6 +132,7 @@
 #define COMPUTE_SVGF_TEMPORAL_GROUP_SIZE_X (16)
 #define COMPUTE_SVGF_VARIANCE_GROUP_SIZE_X (16)
 #define COMPUTE_SVGF_ATROUS_GROUP_SIZE_X (16)
+#define MAX_FOG_VOLUMES (8)
 #define COMPUTE_SVGF_ATROUS_ITERATION_COUNT (4)
 #define COMPUTE_ASVGF_STRATA_SIZE (3)
 #define COMPUTE_ASVGF_GRADIENT_ATROUS_ITERATION_COUNT (4)
@@ -287,6 +288,11 @@ struct ShGlobalUniform
     ivec4 instanceGeomCount[12];
     mat4 viewProjCubemap[6];
     mat4 skyCubemapRotationTransform;
+    vec4 fogMins[8];
+    uint fogIsActive[8];
+    vec4 fogMaxs[8];
+    vec4 fogColor[8];
+    vec4 fogDensity[8];
 };
 
 struct ShGeometryInstance
