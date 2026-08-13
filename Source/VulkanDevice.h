@@ -58,6 +58,8 @@
 #include "PortalList.h"
 #include "RestirBuffers.h"
 #include "Volumetric.h"
+#include "ShadowMap.h"
+#include "GodRays.h"
 
 namespace RTGL1
 {
@@ -174,6 +176,8 @@ private:
     std::shared_ptr<Tonemapping>            tonemapping;
     std::shared_ptr<ImageComposition>       imageComposition;
     std::shared_ptr<Bloom>                  bloom;
+    std::shared_ptr<ShadowMap>              shadowMap;
+    std::shared_ptr<GodRays>                godRays;
     std::shared_ptr<FSR>                    amdFsr;
     std::shared_ptr<DLSS>                   nvDlss;
     std::shared_ptr<Sharpening>             sharpening;

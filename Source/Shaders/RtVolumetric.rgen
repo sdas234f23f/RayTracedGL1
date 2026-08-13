@@ -166,7 +166,8 @@ void main()
 #endif
 
 
-    float scattering = globalUniform.volumeScattering * 0.001;
+    // half the density of the original value to avoid over-fogging when god rays are active
+    float scattering = globalUniform.volumeScattering * 0.0005;
     float absorbtion = 0.0;
 
 

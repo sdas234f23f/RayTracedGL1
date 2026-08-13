@@ -84,6 +84,8 @@ set(Sources
     "Source/TextureObserver.cpp"
     "Source/RestirBuffers.cpp"
     "Source/Volumetric.cpp"
+    "Source/ShadowMap.cpp"
+    "Source/GodRays.cpp"
 )
 
 

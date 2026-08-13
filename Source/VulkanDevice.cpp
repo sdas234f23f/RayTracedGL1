@@ -644,6 +644,53 @@ void VulkanDevice::Render(VkCommandBuffer cmd, const RgDrawFrameInfo &drawInfo)
         // draw decals on top of primary surface
         decalManager->Draw(cmd, frameIndex, uniform, framebuffers, textureManager);
 
+        // volumetric sunlight: render the shadow map and ray march god rays
+        {
+            float sunColor[3], sunDir[3], sunAngularRadius;
+            if (scene->GetLightManager()->GetLastDirectionalLight(sunColor, sunDir, &sunAngularRadius))
+            {
+                float aabbMin[3], aabbMax[3];
+                if (scene->HasAABB())
+                {
+                    scene->GetAABB(aabbMin, aabbMax);
+
+                    float shadowMapVP[16];
+                    float shadowMapDepthScale = 0.0f;
+
+                    const auto &staticCollector  = scene->GetASManager()->GetStaticCollector();
+                    const auto &dynamicCollector = scene->GetASManager()->GetDynamicCollector(frameIndex);
+
+                    if (shadowMap->Render(cmd, sunDir, aabbMin, aabbMax,
+                                          staticCollector.get(), dynamicCollector.get(),
+                                          shadowMapVP, &shadowMapDepthScale))
+                    {
+                        GodRays::Params gr = {};
+                        gr.sunDirection[0] = sunDir[0];
+                        gr.sunDirection[1] = sunDir[1];
+                        gr.sunDirection[2] = sunDir[2];
+                        gr.sunColor[0] = sunColor[0];
+                        gr.sunColor[1] = sunColor[1];
+                        gr.sunColor[2] = sunColor[2];
+
+                        for (int k = 0; k < 3; k++)
+                        {
+                            const float halfSize = std::max((aabbMax[k] - aabbMin[k]) * 0.5f, 1.0f);
+                            gr.worldCenter[k] = (aabbMin[k] + aabbMax[k]) * 0.5f;
+                            gr.worldHalfSizeInv[k] = 1.0f / halfSize;
+                        }
+
+                        memcpy(gr.shadowMapVP, shadowMapVP, 16 * sizeof(float));
+                        gr.shadowMapDepthScale = shadowMapDepthScale;
+                        gr.godRaysIntensity = 2.4f; // +20% vs original 2.0
+                        gr.godRaysEccentricity = 0.75f;
+                        gr.godRaysEnabled = 1u;
+
+                        godRays->Trace(cmd, frameIndex, gr);
+                    }
+                }
+            }
+        }
+
         if (uniform->GetData()->reflectRefractMaxDepth > 0)
         {
             pathTracer->TraceReflectionRefractionRays(params);

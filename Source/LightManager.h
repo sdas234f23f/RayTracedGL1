@@ -49,6 +49,10 @@ public:
     uint32_t GetLightCountPrev() const;
     uint32_t DoesDirectionalLightExist() const;
 
+    // Host-side copy of the last uploaded directional light (for god rays /
+    // shadow map). Returns false if no directional light was ever uploaded.
+    bool GetLastDirectionalLight(float outColor[3], float outDirection[3], float *outAngularRadius) const;
+
     uint32_t GetLightIndexIgnoreFPVShadows(uint32_t frameIndex, uint64_t *pLightUniqueId) const;
 
     void AddSphericalLight(uint32_t frameIndex, const RgSphericalLightUploadInfo &info);
@@ -89,6 +93,11 @@ private:
     uint32_t regLightCount_Prev;
     uint32_t dirLightCount;
     uint32_t dirLightCount_Prev;
+
+    // host-side copy of the last directional light
+    float lastDirLightColor[3];
+    float lastDirLightDirection[3];
+    float lastDirLightAngularRadius;
 
     VkDescriptorSetLayout descSetLayout;
     VkDescriptorPool descPool;

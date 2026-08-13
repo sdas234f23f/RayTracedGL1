@@ -66,6 +66,10 @@ public:
     const std::shared_ptr<LightManager> &GetLightManager();
     const std::shared_ptr<VertexPreprocessing> &GetVertexPreprocessing();
 
+    // World-space AABB accumulated over all uploaded geometry (never shrinks).
+    bool HasAABB() const;
+    void GetAABB(float outMin[3], float outMax[3]) const;
+
     bool DoesUniqueIDExist(uint64_t uniqueID) const;
 
 private:
@@ -87,6 +91,11 @@ private:
 
     bool isRecordingStatic;
     bool submittedStaticInCurrentFrame;
+
+    // accumulated world-space bounds
+    float aabbMin[3];
+    float aabbMax[3];
+    bool  aabbInitialized;
 };
 
 }

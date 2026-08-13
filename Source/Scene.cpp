@@ -23,6 +23,8 @@
 #include "RgException.h"
 #include "CmdLabel.h"
 
+#include <algorithm>
+
 using namespace RTGL1;
 
 Scene::Scene(
@@ -110,6 +112,29 @@ bool Scene::Upload(uint32_t frameIndex, const RgGeometryUploadInfo &uploadInfo)
 {
     assert(!DoesUniqueIDExist(uploadInfo.uniqueID));
 
+    // accumulate world bounds for the shadow map (never shrinks)
+    {
+        const RgVertex *verts = uploadInfo.pVertices;
+        const uint32_t  count = uploadInfo.vertexCount;
+
+        if (!aabbInitialized && count > 0)
+        {
+            aabbInitialized = true;
+            aabbMin[0] = aabbMax[0] = verts[0].position[0];
+            aabbMin[1] = aabbMax[1] = verts[0].position[1];
+            aabbMin[2] = aabbMax[2] = verts[0].position[2];
+        }
+
+        for (uint32_t i = 0; i < count; i++)
+        {
+            for (int k = 0; k < 3; k++)
+            {
+                aabbMin[k] = std::min(aabbMin[k], verts[i].position[k]);
+                aabbMax[k] = std::max(aabbMax[k], verts[i].position[k]);
+            }
+        }
+    }
+
     if (uploadInfo.geomType == RG_GEOMETRY_TYPE_DYNAMIC)
     {
         if (isRecordingStatic)
@@ -149,6 +174,21 @@ bool Scene::Upload(uint32_t frameIndex, const RgGeometryUploadInfo &uploadInfo)
     }
 
     return false;
+}
+
+bool Scene::HasAABB() const
+{
+    return aabbInitialized;
+}
+
+void Scene::GetAABB(float outMin[3], float outMax[3]) const
+{
+    outMin[0] = aabbMin[0];
+    outMin[1] = aabbMin[1];
+    outMin[2] = aabbMin[2];
+    outMax[0] = aabbMax[0];
+    outMax[1] = aabbMax[1];
+    outMax[2] = aabbMax[2];
 }
 
 bool Scene::UpdateTransform(const RgUpdateTransformInfo &updateInfo)

@@ -815,6 +815,54 @@ VkBuffer VertexCollector::GetIndexBuffer() const
     return indexBuffer->GetBuffer();
 }
 
+std::vector<VertexCollector::GeometryDrawInfo> VertexCollector::GetGeometryDrawInfos() const
+{
+    std::vector<GeometryDrawInfo> result;
+
+    if (vertBuffer == nullptr || indexBuffer == nullptr)
+    {
+        return result;
+    }
+
+    const VkDeviceAddress vertexBase = vertBuffer->GetAddress() + offsetof(ShVertex, position);
+    const VkDeviceAddress indexBase  = indexBuffer->GetAddress();
+    const uint32_t        stride     = sizeof(ShVertex);
+
+    for (const auto &[filter, f] : filters)
+    {
+        (void)filter;
+
+        const auto &geoms  = f->GetASGeometries();
+        const auto &ranges = f->GetASBuildRangeInfos();
+
+        const size_t count = std::min(geoms.size(), ranges.size());
+
+        for (size_t i = 0; i < count; i++)
+        {
+            const auto &tr = geoms[i].geometry.triangles;
+
+            GeometryDrawInfo info = {};
+            info.vertexBuffer = vertBuffer->GetBuffer();
+            info.indexBuffer  = indexBuffer->GetBuffer();
+            info.baseVertex   = static_cast<uint32_t>((tr.vertexData.deviceAddress - vertexBase) / stride);
+            info.indexCount   = ranges[i].primitiveCount * 3;
+
+            if (tr.indexType == VK_INDEX_TYPE_UINT32)
+            {
+                info.firstIndex = static_cast<uint32_t>((tr.indexData.deviceAddress - indexBase) / sizeof(uint32_t));
+            }
+            else
+            {
+                info.firstIndex = 0;
+            }
+
+            result.push_back(info);
+        }
+    }
+
+    return result;
+}
+
 const std::vector< uint32_t >& VertexCollector::GetPrimitiveCounts(
     VertexCollectorFilterTypeFlags filter ) const
 {

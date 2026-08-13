@@ -97,6 +97,18 @@ public:
     uint32_t GetCurrentVertexCount() const;
     uint32_t GetCurrentIndexCount() const;
 
+    // Convenience data for drawing the collected geometry with a custom
+    // graphics pipeline (e.g. the shadow map). One entry per geometry.
+    struct GeometryDrawInfo
+    {
+        VkBuffer vertexBuffer;
+        VkBuffer indexBuffer;
+        uint32_t baseVertex;
+        uint32_t firstIndex; // in uint32 elements; 0 when not indexed
+        uint32_t indexCount; // in elements (0 when not indexed)
+    };
+    std::vector<GeometryDrawInfo> GetGeometryDrawInfos() const;
+
 
     // Get primitive counts from filters. Null if corresponding filter wasn't found.
     const std::vector<uint32_t> &GetPrimitiveCounts(VertexCollectorFilterTypeFlags filter) const;

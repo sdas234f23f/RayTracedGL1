@@ -184,6 +184,20 @@ VulkanDevice::VulkanDevice( const RgInstanceCreateInfo* info )
         blueNoise,
         scene->GetLightManager());
 
+    shadowMap           = std::make_shared<ShadowMap>(
+        device,
+        memAllocator,
+        shaderManager);
+
+    godRays             = std::make_shared<GodRays>(
+        device,
+        memAllocator,
+        framebuffers,
+        shaderManager,
+        uniform,
+        blueNoise,
+        shadowMap);
+
     rtPipeline = std::make_shared< RayTracingPipeline >( 
         device,
         physDevice,
@@ -276,6 +290,8 @@ VulkanDevice::VulkanDevice( const RgInstanceCreateInfo* info )
     shaderManager->Subscribe(scene->GetVertexPreprocessing());
     shaderManager->Subscribe(bloom);
     shaderManager->Subscribe(sharpening);
+    shaderManager->Subscribe(shadowMap);
+    shaderManager->Subscribe(godRays);
     shaderManager->Subscribe(effectWipe);
     shaderManager->Subscribe(effectRadialBlur);
     shaderManager->Subscribe(effectChromaticAberration);
@@ -330,6 +346,8 @@ VulkanDevice::~VulkanDevice()
     decalManager.reset();
     portalList.reset();
     lightGrid.reset();
+    shadowMap.reset();
+    godRays.reset();
     worldSamplerManager.reset();
     genericSamplerManager.reset();
     blueNoise.reset();

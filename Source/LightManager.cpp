@@ -359,8 +359,41 @@ void RTGL1::LightManager::AddDirectionalLight(uint32_t frameIndex, const RgDirec
     {
         return;
     }
-    
+
+    // keep a host-side copy for god rays / shadow map
+    lastDirLightColor[0] = info.color.data[0];
+    lastDirLightColor[1] = info.color.data[1];
+    lastDirLightColor[2] = info.color.data[2];
+
+    float dir[3] = { info.direction.data[0], info.direction.data[1], info.direction.data[2] };
+    RTGL1::Utils::Normalize(dir);
+    lastDirLightDirection[0] = dir[0];
+    lastDirLightDirection[1] = dir[1];
+    lastDirLightDirection[2] = dir[2];
+
+    lastDirLightAngularRadius = static_cast<float>(0.5 * static_cast<double>(info.angularDiameterDegrees) * RTGL1::RG_PI / 180.0);
+
     AddLight(frameIndex, info.uniqueID, EncodeAsDirectionalLight(info));
+}
+
+bool RTGL1::LightManager::GetLastDirectionalLight(float outColor[3], float outDirection[3], float *outAngularRadius) const
+{
+    if (dirLightCount == 0)
+    {
+        return false;
+    }
+
+    outColor[0] = lastDirLightColor[0];
+    outColor[1] = lastDirLightColor[1];
+    outColor[2] = lastDirLightColor[2];
+
+    outDirection[0] = lastDirLightDirection[0];
+    outDirection[1] = lastDirLightDirection[1];
+    outDirection[2] = lastDirLightDirection[2];
+
+    *outAngularRadius = lastDirLightAngularRadius;
+
+    return true;
 }
 
 void RTGL1::LightManager::CopyFromStaging(VkCommandBuffer cmd, uint32_t frameIndex)

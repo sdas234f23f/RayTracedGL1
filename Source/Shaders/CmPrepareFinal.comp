@@ -202,7 +202,8 @@ vec3 applyVolumetrics( const ivec2 pix, const vec3 color )
     }
     else
     {
-        float density = globalUniform.volumeScattering * 0.00005;
+        // simple depth-based fog; factor tuned to be clearly visible
+        float density = globalUniform.volumeScattering * 0.001;
 
         if( !isSky )
         {
@@ -228,8 +229,11 @@ void main()
         return;
     }
 
-    const vec3 hdr        = texelFetch( framebufFinal_Sampler, pix, 0 ).rgb;
+    vec3 hdr        = texelFetch( framebufFinal_Sampler, pix, 0 ).rgb;
     const vec3 screenEmis = texelFetch( framebufScreenEmission_Sampler, pix, 0 ).rgb;
+
+    // volumetric sunlight (god rays) — additive, before tonemapping
+    hdr += texelFetch( framebufGodRays_Sampler, pix, 0 ).rgb;
 
     vec3 color = finalizeColor( hdr, screenEmis );
     vec3 bloom = getBloomInput( hdr, screenEmis );

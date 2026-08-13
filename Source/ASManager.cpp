@@ -1070,3 +1070,13 @@ VkDescriptorSetLayout ASManager::GetTLASDescSetLayout() const
 {
     return asDescSetLayout;
 }
+
+const std::shared_ptr<VertexCollector> &ASManager::GetStaticCollector() const
+{
+    return collectorStatic;
+}
+
+const std::shared_ptr<VertexCollector> &ASManager::GetDynamicCollector(uint32_t frameIndex) const
+{
+    return collectorDynamic[frameIndex];
+}

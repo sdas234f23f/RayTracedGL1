@@ -110,6 +110,10 @@ public:
     VkDescriptorSetLayout GetBuffersDescSetLayout() const;
     VkDescriptorSetLayout GetTLASDescSetLayout() const;
 
+    // World geometry collectors (for shadow map rendering).
+    const std::shared_ptr<VertexCollector> &GetStaticCollector() const;
+    const std::shared_ptr<VertexCollector> &GetDynamicCollector(uint32_t frameIndex) const;
+
 private:
     void CreateDescriptors();
     void UpdateBufferDescriptors(uint32_t frameIndex);
