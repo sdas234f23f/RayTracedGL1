@@ -73,6 +73,10 @@ private:
     VkDescriptorPool tmDescPool;
     VkDescriptorSet tmDescSet;
 
+    // host-mapped view of tmBuffer (HOST_VISIBLE) for writing tone mapper params
+    void *mappedTmBuffer = nullptr;
+    bool  resetRequired = true;
+
     VkPipelineLayout pipelineLayout;
 
     VkPipeline histogramPipeline;

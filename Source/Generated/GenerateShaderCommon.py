@@ -361,7 +361,7 @@ CONST = {
 
     "COMPUTE_LUM_HISTOGRAM_GROUP_SIZE_X"    : 16,
     "COMPUTE_LUM_HISTOGRAM_GROUP_SIZE_Y"    : 16,
-    "COMPUTE_LUM_HISTOGRAM_BIN_COUNT"       : 256,
+    "COMPUTE_LUM_HISTOGRAM_BIN_COUNT"       : 128,
 
     "COMPUTE_VERT_PREPROC_GROUP_SIZE_X"     : 256,
     "VERT_PREPROC_MODE_ONLY_DYNAMIC"        : 0,
@@ -656,9 +656,33 @@ LIGHT_IN_CELL = [
     (TYPE_FLOAT32,      1,      "weightSum",            1),
 ]
 
+# Q2RTX-style noise-aware tone mapper (Eilertsen, Mantiuk, Unger + NVIDIA mods).
+# std430, padding is automatic. Host-written params first, then GPU state.
 TONEMAPPING_STRUCT = [
-    (TYPE_UINT32,       1,      "histogram",            CONST["COMPUTE_LUM_HISTOGRAM_BIN_COUNT"]),
-    (TYPE_FLOAT32,      1,      "avgLuminance",         1),
+    (TYPE_FLOAT32,      1,      "tmExposureBias",           1),
+    (TYPE_FLOAT32,      1,      "tmExposureSpeedDown",      1),
+    (TYPE_FLOAT32,      1,      "tmExposureSpeedUp",        1),
+    (TYPE_FLOAT32,      1,      "tmLowPercentile",          1),
+    (TYPE_FLOAT32,      1,      "tmHighPercentile",         1),
+    (TYPE_FLOAT32,      1,      "tmMinLuminance",           1),
+    (TYPE_FLOAT32,      1,      "tmMaxLuminance",           1),
+    (TYPE_FLOAT32,      1,      "tmNoiseBlend",             1),
+    (TYPE_FLOAT32,      1,      "tmNoiseStops",             1),
+    (TYPE_FLOAT32,      1,      "tmDynRangeStops",          1),
+    (TYPE_FLOAT32,      1,      "tmReinhard",               1),
+    (TYPE_FLOAT32,      1,      "tmKneeStart",              1),
+    (TYPE_FLOAT32,      1,      "tmWhitePoint",             1),
+    (TYPE_FLOAT32,      1,      "tmSlopeBlurSigma",         1),
+    (TYPE_FLOAT32,      1,      "frameTime",                1),
+    (TYPE_UINT32,       1,      "resetCurve",               1),
+    (TYPE_FLOAT32,      1,      "kneeW",                    1),
+    (TYPE_FLOAT32,      1,      "kneeA",                    1),
+    (TYPE_FLOAT32,      1,      "kneeB",                    1),
+    (TYPE_UINT32,       1,      "histogram",                CONST["COMPUTE_LUM_HISTOGRAM_BIN_COUNT"]),
+    (TYPE_FLOAT32,      1,      "curve",                    CONST["COMPUTE_LUM_HISTOGRAM_BIN_COUNT"]),
+    (TYPE_FLOAT32,      1,      "normalized",               CONST["COMPUTE_LUM_HISTOGRAM_BIN_COUNT"]),
+    (TYPE_FLOAT32,      1,      "adaptedLuminance",         1),
+    (TYPE_FLOAT32,      1,      "avgLuminance",             1),
 ]
 
 VERT_PREPROC_PUSH_STRUCT = [

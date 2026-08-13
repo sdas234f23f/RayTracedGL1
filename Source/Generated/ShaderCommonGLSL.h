@@ -120,7 +120,7 @@
 #define COMPUTE_EFFECT_GROUP_SIZE_Y (16)
 #define COMPUTE_LUM_HISTOGRAM_GROUP_SIZE_X (16)
 #define COMPUTE_LUM_HISTOGRAM_GROUP_SIZE_Y (16)
-#define COMPUTE_LUM_HISTOGRAM_BIN_COUNT (256)
+#define COMPUTE_LUM_HISTOGRAM_BIN_COUNT (128)
 #define COMPUTE_VERT_PREPROC_GROUP_SIZE_X (256)
 #define VERT_PREPROC_MODE_ONLY_DYNAMIC (0)
 #define VERT_PREPROC_MODE_DYNAMIC_AND_MOVABLE (1)
@@ -317,7 +317,29 @@ struct ShGeometryInstance
 
 struct ShTonemapping
 {
-    uint histogram[256];
+    float tmExposureBias;
+    float tmExposureSpeedDown;
+    float tmExposureSpeedUp;
+    float tmLowPercentile;
+    float tmHighPercentile;
+    float tmMinLuminance;
+    float tmMaxLuminance;
+    float tmNoiseBlend;
+    float tmNoiseStops;
+    float tmDynRangeStops;
+    float tmReinhard;
+    float tmKneeStart;
+    float tmWhitePoint;
+    float tmSlopeBlurSigma;
+    float frameTime;
+    uint resetCurve;
+    float kneeW;
+    float kneeA;
+    float kneeB;
+    uint histogram[128];
+    float curve[128];
+    float normalized[128];
+    float adaptedLuminance;
     float avgLuminance;
 };
 

@@ -22,6 +22,7 @@
 
 #include <vector>
 #include <cmath>
+#include <cstring>
 
 #include "Generated/ShaderCommonC.h"
 #include "CmdLabel.h"
@@ -38,6 +39,14 @@ RTGL1::Tonemapping::Tonemapping(
     framebuffers(std::move(_framebuffers))
 {
     CreateTonemappingBuffer(_allocator);
+
+    // map once; host only writes the params region, GPU owns the rest of the struct
+    mappedTmBuffer = tmBuffer.Map();
+    if (mappedTmBuffer)
+    {
+        memset(mappedTmBuffer, 0, sizeof(ShTonemapping));
+    }
+
     CreateTonemappingDescriptors();
 
     std::vector<VkDescriptorSetLayout> setLayouts =
@@ -53,6 +62,11 @@ RTGL1::Tonemapping::Tonemapping(
 
 RTGL1::Tonemapping::~Tonemapping()
 {
+    if (tmBuffer.IsMapped())
+    {
+        tmBuffer.TryUnmap();
+    }
+
     tmBuffer.Destroy();
 
     vkDestroyDescriptorPool(device, tmDescPool, nullptr);
@@ -65,6 +79,45 @@ RTGL1::Tonemapping::~Tonemapping()
 void RTGL1::Tonemapping::CalculateExposure(VkCommandBuffer cmd, uint32_t frameIndex, const std::shared_ptr<const GlobalUniform> &uniform)
 {
     CmdLabel label(cmd, "Exposure");
+
+    // Write tone mapper params from the host. Only the params prefix of the
+    // buffer is touched here; the histogram/curve state lives past it and is
+    // owned by the GPU.
+    if (mappedTmBuffer)
+    {
+        ShTonemapping *tm = static_cast<ShTonemapping *>(mappedTmBuffer);
+
+        // Q2RTX defaults (global_ubo.h, tm_* cvars)
+        tm->tmExposureBias     = -1.0f;
+        tm->tmExposureSpeedDown = 1.0f;
+        tm->tmExposureSpeedUp   = 2.0f;
+        tm->tmLowPercentile     = 70.0f;
+        tm->tmHighPercentile    = 90.0f;
+        tm->tmMinLuminance      = 0.0002f;
+        tm->tmMaxLuminance      = 1.0f;
+        tm->tmNoiseBlend        = 0.5f;
+        tm->tmNoiseStops        = -12.0f;
+        tm->tmDynRangeStops     = 7.0f;
+        tm->tmReinhard          = 0.5f;
+        tm->tmKneeStart         = 0.6f;
+        tm->tmWhitePoint        = 10.0f;
+        tm->tmSlopeBlurSigma    = 12.0f;
+        tm->frameTime           = uniform->GetData()->timeDelta;
+        tm->resetCurve          = resetRequired ? 1u : 0u;
+
+        // Piecewise knee (tone_mapping.c): y(x) = (w*x+a)/(x+b) with
+        //   y(kneeStart)=kneeStart, dy/dx(kneeStart)=1, y(kneeWhitePoint)=whitePoint
+        const float kneeStart      = tm->tmKneeStart;
+        const float kneeWhitePoint = tm->tmWhitePoint;
+        const float kneeW = (kneeStart * (kneeStart - 2.0f) + kneeWhitePoint) / (kneeWhitePoint - 1.0f);
+        const float kneeA = -kneeStart * kneeStart;
+        const float kneeB = kneeW - 2.0f * kneeStart;
+        tm->kneeW = kneeW;
+        tm->kneeA = kneeA;
+        tm->kneeB = kneeB;
+
+        resetRequired = false;
+    }
 
     // sync access to histogram buffer
     {
@@ -193,7 +246,7 @@ void RTGL1::Tonemapping::CreateTonemappingBuffer(const std::shared_ptr<MemoryAll
         allocator,
         sizeof(ShTonemapping),
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
         "Tonemapping buffer");
 }
 

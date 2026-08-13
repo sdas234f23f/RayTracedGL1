@@ -20,68 +20,78 @@
 
 #version 460
 
-#define LUMINANCE_EPS 0.001
-
-
 #define DESC_SET_FRAMEBUFFERS 0
 #define DESC_SET_GLOBAL_UNIFORM 1
 #define DESC_SET_TONEMAPPING 2
 #define TONEMAPPING_BUFFER_WRITEABLE
 #include "ShaderCommonGLSLFunc.h"
+#include "TonemappingUtils.glsl"
 
 layout(local_size_x = COMPUTE_LUM_HISTOGRAM_GROUP_SIZE_X, local_size_y = COMPUTE_LUM_HISTOGRAM_GROUP_SIZE_Y, local_size_z = 1) in;
 
-#if COMPUTE_LUM_HISTOGRAM_BIN_COUNT != COMPUTE_LUM_HISTOGRAM_GROUP_SIZE_X * COMPUTE_LUM_HISTOGRAM_GROUP_SIZE_Y
-    #error
-#endif
+// Q2RTX-style saliency-weighted histogram over log2 luminance (photographic
+// stops) of the pre-final HDR image. Values are accumulated in fixed-point
+// so that atomic additions don't lose precision.
+// Ported from Quake 2 RTX (tone_mapping_histogram.comp), GPL v2.
 
-shared uint histogramWorkGroup[COMPUTE_LUM_HISTOGRAM_GROUP_SIZE_X * COMPUTE_LUM_HISTOGRAM_GROUP_SIZE_Y];
-
-// c -- linear HDR color
-uint getColorBin(vec3 c, float minLogLuminance, float maxLogLuminance)
-{
-    float luminance = getLuminance(c);
-    float inverseLogLuminanceRange = 1.0 / (maxLogLuminance - minLogLuminance);
-
-    if (luminance < LUMINANCE_EPS)
-    {
-        return 0;
-    }
-
-    float logLuminance = clamp((log2(luminance) - minLogLuminance) * inverseLogLuminanceRange, 0.0, 1.0);
-
-    // [0.0, 1.0] -> [1, 255]
-    return uint(logLuminance * 254.0 + 1.0);
-}
-
-// https://bruop.github.io/exposure/
-// http://www.alextardif.com/HistogramLuminance.html
-// https://knarkowicz.wordpress.com/2016/01/09/automatic-exposure/
+shared uint s_Histogram[HISTOGRAM_BINS];
 
 void main()
 {
-    // init all work group's bins as 0
-    const uint wgBinIndex = gl_LocalInvocationIndex;
-    histogramWorkGroup[wgBinIndex] = 0;
+    const ivec2 ipos = ivec2(gl_GlobalInvocationID);
+    const ivec2 screenSize = ivec2(globalUniform.renderWidth, globalUniform.renderHeight);
 
-    groupMemoryBarrier();
+    const bool validThread = !any(greaterThanEqual(ipos, screenSize));
 
+    const vec3 input_color = validThread ? texelFetch(framebufPreFinal_Sampler, ipos, 0).rgb : vec3(0.0);
 
-    const ivec2 pix = ivec2(gl_GlobalInvocationID.x, gl_GlobalInvocationID.y);
+    const uint linear_idx = gl_LocalInvocationIndex;
 
-    if (pix.x < uint(globalUniform.renderWidth) && pix.y < uint(globalUniform.renderHeight))
+    // init shared histogram
+    if (validThread && linear_idx < HISTOGRAM_BINS)
     {
-        const vec3 hdrColor = texelFetch(framebufPreFinal_Sampler, pix, 0).rgb;
-
-        const uint colorBin = getColorBin(hdrColor, globalUniform.minLogLuminance, globalUniform.maxLogLuminance);
-        atomicAdd(histogramWorkGroup[colorBin], 1);
+        s_Histogram[linear_idx] = 0;
     }
 
-    groupMemoryBarrier();
+    barrier();
 
+    // Ignore completely black pixels
+    if (validThread && getLuminance(input_color) > 0.0)
+    {
+        const float lum = max(getLuminance(input_color), exp2(min_log_luminance));
+        const float biased_log_luminance = log2(lum) * log_luminance_scale + log_luminance_bias;
+        const float histogram_bin = clamp(biased_log_luminance * HISTOGRAM_BINS, 0.0, HISTOGRAM_BINS - 1.0);
 
-    // add the results of each bin in the current work group to global histogram;
-    // assuming that the amount of bins == amount of invocations in work group
-    const uint globalBinIndex = gl_LocalInvocationIndex;
-    atomicAdd(tonemapping.histogram[globalBinIndex], histogramWorkGroup[wgBinIndex]);
+        // Distribute luminance between two bins using a linear (tent) filter
+        const uint left_bin = uint(histogram_bin);
+        const uint right_bin = left_bin + 1;
+
+        // Pixel importance based on distance to the center of the screen
+        const float weight = clamp(1.0 - length(vec2(ipos) / vec2(screenSize) - vec2(0.5)) * 1.5, 0.01, 1.0);
+
+        const float right_weight_F = fract(histogram_bin) * weight;
+        const float left_weight_F = weight - right_weight_F;
+
+        // fixed-point for atomic addition
+        const uint right_weight_U = uint(right_weight_F * FIXED_POINT_FRAC_MULTIPLIER);
+        const uint left_weight_U = uint(left_weight_F * FIXED_POINT_FRAC_MULTIPLIER);
+
+        atomicAdd(s_Histogram[left_bin], left_weight_U);
+        if (right_bin < HISTOGRAM_BINS)
+        {
+            atomicAdd(s_Histogram[right_bin], right_weight_U);
+        }
+    }
+
+    barrier();
+
+    // add workgroup histogram to the global histogram
+    if (validThread && linear_idx < HISTOGRAM_BINS)
+    {
+        const int localBinValue = int(s_Histogram[linear_idx]);
+        if (localBinValue != 0)
+        {
+            atomicAdd(tonemapping.histogram[linear_idx], localBinValue);
+        }
+    }
 }
