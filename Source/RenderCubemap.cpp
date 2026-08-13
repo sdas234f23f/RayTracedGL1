@@ -21,14 +21,20 @@
 #include "RenderCubemap.h"
 
 #include <algorithm>
+#include <cmath>
+#include <cstring>
 
+#include "CmdLabel.h"
 #include "Matrix.h"
 #include "RasterizedDataCollector.h"
+#include "Utils.h"
 #include "Generated/ShaderCommonC.h"
 
 
-constexpr VkFormat CUBEMAP_FORMAT = VK_FORMAT_R8G8B8A8_UNORM; 
+// high-res HDR cubemap, matching Q2RTX physical sky quality (1024^2, R16G16B16A16_SFLOAT)
+constexpr VkFormat CUBEMAP_FORMAT = VK_FORMAT_R16G16B16A16_SFLOAT; 
 constexpr VkFormat CUBEMAP_DEPTH_FORMAT = VK_FORMAT_D16_UNORM; 
+constexpr uint32_t CUBEMAP_SIDE_SIZE = 1024;
 
 
 namespace RTGL1
@@ -63,12 +69,13 @@ RTGL1::RenderCubemap::RenderCubemap(
     const RgInstanceCreateInfo &_instanceInfo)
 :
     device(_device),
+    allocator(_allocator),
     pipelineLayout(VK_NULL_HANDLE),
     multiviewRenderPass(VK_NULL_HANDLE),
     cubemap{},
     cubemapDepth{},
     cubemapFramebuffer(VK_NULL_HANDLE),
-    cubemapSize(std::max(_instanceInfo.rasterizedSkyCubemapSize, 16u)),
+    cubemapSize(CUBEMAP_SIDE_SIZE),
     descSetLayout(VK_NULL_HANDLE),
     descPool(VK_NULL_HANDLE),
     descSet(VK_NULL_HANDLE)
@@ -85,10 +92,26 @@ RTGL1::RenderCubemap::RenderCubemap(
 
     CreateFramebuffer(cubemapSize);
     CreateDescriptors(_samplerManager);
+
+    CreateProceduralSkyParamsBuffer();
+    CreateProceduralSkyDescriptors();
+    CreateProceduralSkyPipelineLayout();
+    CreateProceduralSkyPipeline(_shaderManager.get());
 }
 
 RTGL1::RenderCubemap::~RenderCubemap()
 {
+    if (mappedProcSkyParams)
+    {
+        procSkyParamsBuffer.TryUnmap();
+    }
+    procSkyParamsBuffer.Destroy();
+
+    vkDestroyDescriptorPool(device, procSkyDescPool, nullptr);
+    vkDestroyDescriptorSetLayout(device, procSkyDescSetLayout, nullptr);
+    vkDestroyPipelineLayout(device, procSkyPipelineLayout, nullptr);
+    DestroyProceduralSkyPipelines();
+
     vkDestroyDescriptorPool(device, descPool, nullptr);
     vkDestroyDescriptorSetLayout(device, descSetLayout, nullptr);
     vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
@@ -108,6 +131,8 @@ RTGL1::RenderCubemap::~RenderCubemap()
 void RTGL1::RenderCubemap::OnShaderReload(const ShaderManager *shaderManager)
 {
     pipelines->OnShaderReload( shaderManager );
+    DestroyProceduralSkyPipelines();
+    CreateProceduralSkyPipeline(shaderManager);
 }
 
 void RTGL1::RenderCubemap::Draw(VkCommandBuffer cmd, uint32_t frameIndex,
@@ -360,7 +385,7 @@ void RTGL1::RenderCubemap::CreateAttch(
     imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
     imageInfo.usage = isDepth ?
         VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT :
-        VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+        VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT;
     imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
     VkResult r = vkCreateImage(device, &imageInfo, nullptr, &result.image);
@@ -531,3 +556,226 @@ void RTGL1::RenderCubemap::CreateDescriptors(const std::shared_ptr<SamplerManage
 
     vkUpdateDescriptorSets(device, 1, &wrt, 0, nullptr);
 }
+
+void RTGL1::RenderCubemap::CreateProceduralSkyParamsBuffer()
+{
+    procSkyParamsBuffer.Init(
+        allocator,
+        sizeof(ProceduralSkyParams),
+        VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+        "Procedural sky params buffer");
+
+    mappedProcSkyParams = procSkyParamsBuffer.Map();
+    if (mappedProcSkyParams)
+    {
+        memset(mappedProcSkyParams, 0, sizeof(ProceduralSkyParams));
+    }
+}
+
+void RTGL1::RenderCubemap::CreateProceduralSkyDescriptors()
+{
+    VkResult r;
+
+    VkDescriptorSetLayoutBinding bindings[2] = {};
+
+    // 0: cubemap storage image
+    bindings[0].binding = 0;
+    bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    bindings[0].descriptorCount = 1;
+    bindings[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
+    // 1: params buffer
+    bindings[1].binding = 1;
+    bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    bindings[1].descriptorCount = 1;
+    bindings[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
+    VkDescriptorSetLayoutCreateInfo layoutInfo = {};
+    layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    layoutInfo.bindingCount = 2;
+    layoutInfo.pBindings = bindings;
+
+    r = vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &procSkyDescSetLayout);
+    VK_CHECKERROR(r);
+
+    SET_DEBUG_NAME(device, procSkyDescSetLayout, VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT, "Procedural sky desc set layout");
+
+    VkDescriptorPoolSize poolSizes[2] = {};
+    poolSizes[0].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    poolSizes[0].descriptorCount = 1;
+    poolSizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    poolSizes[1].descriptorCount = 1;
+
+    VkDescriptorPoolCreateInfo poolInfo = {};
+    poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolInfo.maxSets = 1;
+    poolInfo.poolSizeCount = 2;
+    poolInfo.pPoolSizes = poolSizes;
+
+    r = vkCreateDescriptorPool(device, &poolInfo, nullptr, &procSkyDescPool);
+    VK_CHECKERROR(r);
+
+    SET_DEBUG_NAME(device, procSkyDescPool, VK_OBJECT_TYPE_DESCRIPTOR_POOL, "Procedural sky desc pool");
+
+    VkDescriptorSetAllocateInfo allocInfo = {};
+    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocInfo.descriptorPool = procSkyDescPool;
+    allocInfo.descriptorSetCount = 1;
+    allocInfo.pSetLayouts = &procSkyDescSetLayout;
+
+    r = vkAllocateDescriptorSets(device, &allocInfo, &procSkyDescSet);
+    VK_CHECKERROR(r);
+
+    SET_DEBUG_NAME(device, procSkyDescSet, VK_OBJECT_TYPE_DESCRIPTOR_SET, "Procedural sky desc set");
+
+    VkDescriptorImageInfo imgInfo = {};
+    imgInfo.imageView = cubemap.view;
+    imgInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+    VkDescriptorBufferInfo bufInfo = {};
+    bufInfo.buffer = procSkyParamsBuffer.GetBuffer();
+    bufInfo.offset = 0;
+    bufInfo.range = VK_WHOLE_SIZE;
+
+    VkWriteDescriptorSet writes[2] = {};
+    writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[0].dstSet = procSkyDescSet;
+    writes[0].dstBinding = 0;
+    writes[0].descriptorCount = 1;
+    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    writes[0].pImageInfo = &imgInfo;
+
+    writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[1].dstSet = procSkyDescSet;
+    writes[1].dstBinding = 1;
+    writes[1].descriptorCount = 1;
+    writes[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    writes[1].pBufferInfo = &bufInfo;
+
+    vkUpdateDescriptorSets(device, 2, writes, 0, nullptr);
+}
+
+void RTGL1::RenderCubemap::CreateProceduralSkyPipelineLayout()
+{
+    VkResult r;
+
+    VkPipelineLayoutCreateInfo layoutInfo = {};
+    layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    layoutInfo.setLayoutCount = 1;
+    layoutInfo.pSetLayouts = &procSkyDescSetLayout;
+
+    r = vkCreatePipelineLayout(device, &layoutInfo, nullptr, &procSkyPipelineLayout);
+    VK_CHECKERROR(r);
+
+    SET_DEBUG_NAME(device, procSkyPipelineLayout, VK_OBJECT_TYPE_PIPELINE_LAYOUT, "Procedural sky pipeline layout");
+}
+
+void RTGL1::RenderCubemap::CreateProceduralSkyPipeline(const ShaderManager *shaderManager)
+{
+    VkResult r;
+
+    VkComputePipelineCreateInfo pipelineInfo = {};
+    pipelineInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+    pipelineInfo.layout = procSkyPipelineLayout;
+    pipelineInfo.stage = shaderManager->GetStageInfo("CProceduralSky");
+
+    r = vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &procSkyPipeline);
+    VK_CHECKERROR(r);
+
+    SET_DEBUG_NAME(device, procSkyPipeline, VK_OBJECT_TYPE_PIPELINE, "Procedural sky pipeline");
+}
+
+void RTGL1::RenderCubemap::DestroyProceduralSkyPipelines()
+{
+    if (procSkyPipeline)
+    {
+        vkDestroyPipeline(device, procSkyPipeline, nullptr);
+        procSkyPipeline = VK_NULL_HANDLE;
+    }
+}
+
+void RTGL1::RenderCubemap::DrawProcedural(VkCommandBuffer cmd, const ProceduralSkyParams &inParams)
+{
+    CmdLabel label(cmd, "Procedural sky");
+
+    ProceduralSkyParams params = inParams;
+
+    // Clouds off: freeze the animation time so the cached sky isn't re-rendered
+    // every frame (only when sun/sky params change).
+    // Clouds on: keep the raw time -> the sky re-renders every frame (smooth per-frame drift).
+    if (params.cloudParams[3] <= 0.5f)
+    {
+        params.cloudColor[3] = 0.0f;
+    }
+
+    if (mappedProcSkyParams)
+    {
+        // no changes since the last render - keep the cached cubemap
+        if (memcmp(mappedProcSkyParams, &params, sizeof(ProceduralSkyParams)) == 0)
+        {
+            return;
+        }
+
+        memcpy(mappedProcSkyParams, &params, sizeof(ProceduralSkyParams));
+    }
+
+    // cubemap: SHADER_READ_ONLY -> GENERAL
+    {
+        VkImageMemoryBarrier barrier = {};
+        barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        barrier.image = cubemap.image;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        barrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        barrier.subresourceRange.baseMipLevel = 0;
+        barrier.subresourceRange.levelCount = 1;
+        barrier.subresourceRange.baseArrayLayer = 0;
+        barrier.subresourceRange.layerCount = 6;
+
+        vkCmdPipelineBarrier(
+            cmd,
+            VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0,
+            0, nullptr,
+            0, nullptr,
+            1, &barrier);
+    }
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, procSkyPipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, procSkyPipelineLayout,
+                            0, 1, &procSkyDescSet, 0, nullptr);
+
+    const uint32_t wgX = Utils::GetWorkGroupCount(cubemapSize, 16);
+    const uint32_t wgY = Utils::GetWorkGroupCount(cubemapSize, 16);
+    vkCmdDispatch(cmd, wgX, wgY, 6);
+
+    // cubemap: GENERAL -> SHADER_READ_ONLY
+    {
+        VkImageMemoryBarrier barrier = {};
+        barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        barrier.image = cubemap.image;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+        barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        barrier.subresourceRange.baseMipLevel = 0;
+        barrier.subresourceRange.levelCount = 1;
+        barrier.subresourceRange.baseArrayLayer = 0;
+        barrier.subresourceRange.layerCount = 6;
+
+        vkCmdPipelineBarrier(
+            cmd,
+            VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0,
+            0, nullptr,
+            0, nullptr,
+            1, &barrier);
+    }
+}
+

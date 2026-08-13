@@ -272,7 +272,7 @@ vec3 getSkyPrimary(vec3 direction)
     uint skyType = globalUniform.skyType;
 
 #ifdef DESC_SET_RENDER_CUBEMAP
-    if (skyType == SKY_TYPE_RASTERIZED_GEOMETRY)
+    if (skyType == SKY_TYPE_RASTERIZED_GEOMETRY || skyType == SKY_TYPE_PROCEDURAL)
     {
         return texture(renderCubemap, direction).rgb;
     }
@@ -291,9 +291,7 @@ vec3 getSkyPrimary(vec3 direction)
 vec3 getSky(vec3 direction)
 {
     vec3 col = getSkyPrimary(direction);
-    float l = getLuminance(col);
-
-    return mix(vec3(l), col, globalUniform.skyColorSaturation) * globalUniform.skyColorMultiplier;
+    return col * globalUniform.skyColorMultiplier;
 }
 #endif
 

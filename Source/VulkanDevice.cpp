@@ -21,6 +21,7 @@
 #include "VulkanDevice.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <stdexcept>
 
@@ -222,6 +223,7 @@ void VulkanDevice::FillUniform(ShGlobalUniform *gu, const RgDrawFrameInfo &drawI
 
             gu->skyType = sp.skyType == RG_SKY_TYPE_CUBEMAP ? SKY_TYPE_CUBEMAP :
                           sp.skyType == RG_SKY_TYPE_RASTERIZED_GEOMETRY ? SKY_TYPE_RASTERIZED_GEOMETRY :
+                          sp.skyType == RG_SKY_TYPE_PROCEDURAL ? SKY_TYPE_PROCEDURAL :
                           SKY_TYPE_COLOR;
 
             gu->skyCubemapIndex = cubemapManager->IsCubemapValid( sp.skyCubemap ) ? sp.skyCubemap : RG_EMPTY_CUBEMAP;
@@ -614,6 +616,82 @@ void VulkanDevice::Render(VkCommandBuffer cmd, const RgDrawFrameInfo &drawInfo)
 
             rasterizer->DrawSkyToCubemap(cmd, frameIndex, textureManager, uniform);
             rasterizer->DrawSkyToAlbedo(cmd, frameIndex, textureManager, uniform->GetData()->view, skyViewerPosition.data, uniform->GetData()->projection, jitter, renderResolution);
+        }
+        // fill the sky cubemap with a procedural atmosphere (compute)
+        else if (uniform->GetData()->skyType == RG_SKY_TYPE_PROCEDURAL)
+        {
+            RenderCubemap::ProceduralSkyParams p = {};
+
+            // sky color follows the sun preset (rt_sky_light_*), sent by the host via skyColorDefault;
+            // this keeps the sky tint independent from whether the sun light is enabled (rt_sun)
+            p.sunColor[0] = uniform->GetData()->skyColorDefault[0];
+            p.sunColor[1] = uniform->GetData()->skyColorDefault[1];
+            p.sunColor[2] = uniform->GetData()->skyColorDefault[2];
+
+            float sunColor[3], sunDir[3], sunAngularRadius = 0.0047f;
+            if (scene->GetLightManager()->GetLastDirectionalLight(sunColor, sunDir, &sunAngularRadius))
+            {
+                // the directional light direction points FROM the sun toward the scene;
+                // the sky shader expects the direction TOWARD the sun
+                p.sunDirection[0] = -sunDir[0];
+                p.sunDirection[1] = -sunDir[1];
+                p.sunDirection[2] = -sunDir[2];
+            }
+            else
+            {
+                // no sun: fallback to a default elevation/azimuth (direction toward the sun)
+                float d[3] = { 0.3f, 0.5f, 0.8f };
+                const float len = std::sqrt(d[0]*d[0] + d[1]*d[1] + d[2]*d[2]);
+                p.sunDirection[0] = d[0] / len;
+                p.sunDirection[1] = d[1] / len;
+                p.sunDirection[2] = d[2] / len;
+            }
+            p.sunColor[3] = sunAngularRadius;
+            p.skyParams[0] = uniform->GetData()->skyColorMultiplier;
+            p.skyParams[1] = uniform->GetData()->skyColorSaturation;
+            p.skyParams[2] = 25.0f;  // sun disc intensity
+            p.skyParams[3] = 0.025f; // display sun disc angular radius (rad), ~1.4 deg; physical 0.05 deg is sub-pixel
+
+            // cloud params are packed into the otherwise-unused skyCubemapRotationTransform field
+            // (keeps the public RG_* API unchanged):
+            //   [0..2] cloud color rgb, [3] coverage, [4] density, [5] drift speed, [6] enabled
+            p.cloudColor[3] = uniform->GetData()->time; // cloud animation time
+            if (drawInfo.pSkyParams)
+            {
+                const float *c = &drawInfo.pSkyParams->skyCubemapRotationTransform.matrix[0][0];
+                p.cloudColor[0] = c[0];
+                p.cloudColor[1] = c[1];
+                p.cloudColor[2] = c[2];
+                p.cloudParams[0] = c[3];
+                p.cloudParams[1] = c[4];
+                p.cloudParams[2] = c[5];
+                p.cloudParams[3] = c[6];
+            }
+
+            // per-face camera bases, matching Matrix::GetCubemapViewProjMat
+            constexpr float PI = 3.14159265358979323846f;
+            const float faceAngles[6][2] = {
+                { 0.0f,        PI / 2.0f }, // POSITIVE_X
+                { 0.0f,       -PI / 2.0f }, // NEGATIVE_X
+                { -PI / 2.0f, 0.0f       }, // POSITIVE_Y
+                {  PI / 2.0f, 0.0f       }, // NEGATIVE_Y
+                { 0.0f,        0.0f      }, // POSITIVE_Z
+                { 0.0f,        PI        }, // NEGATIVE_Z
+            };
+
+            float view[16];
+            const float origin[3] = { 0.0f, 0.0f, 0.0f };
+            for (uint32_t face = 0; face < 6; face++)
+            {
+                Matrix::GetViewMatrix(view, origin, faceAngles[face][0], faceAngles[face][1], 0.0f);
+
+                // column-major columns of the view rotation: right, up, forward
+                p.faceBasis[face * 3 + 0][0] = view[0];  p.faceBasis[face * 3 + 0][1] = view[4];  p.faceBasis[face * 3 + 0][2] = view[8];
+                p.faceBasis[face * 3 + 1][0] = view[1];  p.faceBasis[face * 3 + 1][1] = view[5];  p.faceBasis[face * 3 + 1][2] = view[9];
+                p.faceBasis[face * 3 + 2][0] = view[2];  p.faceBasis[face * 3 + 2][1] = view[6];  p.faceBasis[face * 3 + 2][2] = view[10];
+            }
+
+            rasterizer->GetRenderCubemap()->DrawProcedural(cmd, p);
         }
     }
 

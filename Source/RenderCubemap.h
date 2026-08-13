@@ -21,6 +21,7 @@
 #pragma once
 
 #include "Common.h"
+#include "Buffer.h"
 #include "GlobalUniform.h"
 #include "MemoryAllocator.h"
 #include "RasterizedDataCollector.h"
@@ -32,6 +33,18 @@ namespace RTGL1
 
 class RenderCubemap : public IShaderDependency
 {
+public:
+    // params for the procedural sky compute pass (std140)
+    struct ProceduralSkyParams
+    {
+        float faceBasis[18][4]; // 6 faces * (right, up, forward)
+        float sunDirection[4];
+        float sunColor[4];      // xyz color, w = sun angular radius (rad)
+        float skyParams[4];     // x = multiplier, y = tint strength, z = sun disc intensity, w = sun disc radius
+        float cloudColor[4];    // xyz = cloud color, w = cloud time (s)
+        float cloudParams[4];   // x = coverage, y = density, z = drift speed, w = enabled
+    };
+
 public:
     RenderCubemap(VkDevice device,
                   const std::shared_ptr<MemoryAllocator> &allocator,
@@ -53,6 +66,9 @@ public:
                const std::shared_ptr< RasterizedDataCollector >& skyDataCollector,
               const std::shared_ptr<TextureManager> &textureManager,
               const std::shared_ptr<GlobalUniform> &uniform);
+
+    // Fill the cubemap with a procedural atmospheric sky (compute)
+    void DrawProcedural(VkCommandBuffer cmd, const ProceduralSkyParams &params);
 
     VkDescriptorSetLayout GetDescSetLayout() const;
     VkDescriptorSet GetDescSet() const;
@@ -78,8 +94,16 @@ private:
 
     void BindPipelineIfNew(VkCommandBuffer cmd, const RasterizedDataCollector::DrawInfo &info, VkPipeline &curPipeline);
 
+    // procedural sky (compute)
+    void CreateProceduralSkyPipelineLayout();
+    void CreateProceduralSkyDescriptors();
+    void CreateProceduralSkyParamsBuffer();
+    void CreateProceduralSkyPipeline(const ShaderManager *shaderManager);
+    void DestroyProceduralSkyPipelines();
+
 private:
     VkDevice device;
+    std::shared_ptr<MemoryAllocator> allocator;
 
     VkPipelineLayout pipelineLayout;
     std::shared_ptr<RasterizerPipelines> pipelines;
@@ -96,6 +120,17 @@ private:
     VkDescriptorSetLayout descSetLayout;
     VkDescriptorPool descPool;
     VkDescriptorSet descSet;
+
+    // procedural sky (compute)
+    Buffer procSkyParamsBuffer;
+    void *mappedProcSkyParams = nullptr;
+
+    VkDescriptorSetLayout procSkyDescSetLayout = VK_NULL_HANDLE;
+    VkDescriptorPool      procSkyDescPool      = VK_NULL_HANDLE;
+    VkDescriptorSet       procSkyDescSet       = VK_NULL_HANDLE;
+
+    VkPipelineLayout procSkyPipelineLayout = VK_NULL_HANDLE;
+    VkPipeline       procSkyPipeline       = VK_NULL_HANDLE;
 };
 
 }

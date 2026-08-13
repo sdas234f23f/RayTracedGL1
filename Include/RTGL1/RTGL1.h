@@ -850,7 +850,10 @@ typedef enum RgSkyType
 {
     RG_SKY_TYPE_COLOR,
     RG_SKY_TYPE_CUBEMAP,
-    RG_SKY_TYPE_RASTERIZED_GEOMETRY
+    RG_SKY_TYPE_RASTERIZED_GEOMETRY,
+    // Procedural atmospheric sky. The sky cubemap is filled by a compute
+    // pass using the current directional light (sun) direction/color.
+    RG_SKY_TYPE_PROCEDURAL
 } RgSkyType;
 
 typedef struct RgDrawFrameTonemappingParams
