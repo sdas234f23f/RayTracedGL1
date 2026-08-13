@@ -910,6 +910,9 @@ typedef enum RgDebugDrawFlagBits
     RG_DEBUG_DRAW_MOTION_VECTORS_BIT = 128,
     RG_DEBUG_DRAW_GRADIENTS_BIT = 256,
     RG_DEBUG_DRAW_LIGHT_GRID_BIT = 512,
+    // Internal: enables the new Q2RTX-style core rendering path.
+    // The host sets this bit when the "rt_core_q2rtx" cvar is enabled.
+    RG_DEBUG_DRAW_Q2RTX_CORE_BIT = 1024,
 } RgDebugDrawFlagBits;
 typedef RgFlags RgDebugDrawFlags;
 

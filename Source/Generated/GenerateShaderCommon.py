@@ -597,7 +597,8 @@ GLOBAL_UNIFORM_STRUCT = [
     (TYPE_FLOAT32,      4,      "volumeDirToSource",                1),
 
     (TYPE_FLOAT32,      1,      "volumeSourceAsymmetry",            1),
-    (TYPE_FLOAT32,      1,      "_pad1",                            1),
+    # 1 if the new Q2RTX-style core path is enabled (host sets RG_DEBUG_DRAW_Q2RTX_CORE_BIT)
+    (TYPE_UINT32,       1,      "coreQ2RTX",                        1),
     (TYPE_FLOAT32,      1,      "_pad2",                            1),
     (TYPE_FLOAT32,      1,      "_pad3",                            1),
 
@@ -880,6 +881,55 @@ if GRADIENT_ESTIMATION_ENABLED:
         "DISPongGradient"               : (TYPE_UNORM8,     COMPONENT_RGBA, FRAMEBUF_FLAGS_FORCE_SIZE_1_3),
         "DISGradientHistory"            : (TYPE_UNORM8,     COMPONENT_RGBA, FRAMEBUF_FLAGS_FORCE_SIZE_1_3),
         "GradientPrevPix"               : (TYPE_UINT8,      COMPONENT_R,    FRAMEBUF_FLAGS_FORCE_SIZE_1_3),
+    })
+
+# New Q2RTX-style core path (Slice 4). The ASVGF denoiser works in the Q2RTX
+# channel format: LF (indirect diffuse, YCoCg luma SH + chroma), HF (direct
+# diffuse, packed RGBE), SPEC (specular, packed RGBE).
+Q2_CORE_ENABLED = True
+
+if Q2_CORE_ENABLED:
+    FRAMEBUFFERS.update({
+        # ASVGF input colors, written by the ReSTIR -> ASVGF adapter.
+        # Full resolution (checkerboarded).
+        "Q2ColorLF_SH"                  : (TYPE_FLOAT16,    COMPONENT_RGBA, 0),
+        "Q2ColorLF_COCG"                : (TYPE_FLOAT16,    COMPONENT_RG,   0),
+        "Q2ColorHF"                     : (TYPE_UINT32,     COMPONENT_R,    0),
+        "Q2ColorSpec"                   : (TYPE_UINT32,     COMPONENT_R,    0),
+
+        # ASVGF history (A/B double buffered through STORE_PREV)
+        "Q2HistColorLF_SH"              : (TYPE_FLOAT16,    COMPONENT_RGBA, FRAMEBUF_FLAGS_STORE_PREV),
+        "Q2HistColorLF_COCG"            : (TYPE_FLOAT16,    COMPONENT_RG,   FRAMEBUF_FLAGS_STORE_PREV),
+        "Q2HistColorHF"                 : (TYPE_UINT32,     COMPONENT_R,    FRAMEBUF_FLAGS_STORE_PREV),
+        "Q2HistMomentsHF"               : (TYPE_FLOAT16,    COMPONENT_RGBA, FRAMEBUF_FLAGS_STORE_PREV),
+        "Q2FilteredSpec"                : (TYPE_FLOAT16,    COMPONENT_RGBA, FRAMEBUF_FLAGS_STORE_PREV),
+
+        # ASVGF a-trous ping/pong. LF is at 1/3 resolution (like Q2RTX GRAD_DWN).
+        "Q2AtrousPingLF_SH"             : (TYPE_FLOAT16,    COMPONENT_RGBA, FRAMEBUF_FLAGS_FORCE_SIZE_1_3),
+        "Q2AtrousPongLF_SH"             : (TYPE_FLOAT16,    COMPONENT_RGBA, FRAMEBUF_FLAGS_FORCE_SIZE_1_3),
+        "Q2AtrousPingLF_COCG"           : (TYPE_FLOAT16,    COMPONENT_RG,   FRAMEBUF_FLAGS_FORCE_SIZE_1_3),
+        "Q2AtrousPongLF_COCG"           : (TYPE_FLOAT16,    COMPONENT_RG,   FRAMEBUF_FLAGS_FORCE_SIZE_1_3),
+        "Q2AtrousPingHF"                : (TYPE_UINT32,     COMPONENT_R,    0),
+        "Q2AtrousPongHF"                : (TYPE_UINT32,     COMPONENT_R,    0),
+        "Q2AtrousPingSpec"              : (TYPE_UINT32,     COMPONENT_R,    0),
+        "Q2AtrousPongSpec"              : (TYPE_UINT32,     COMPONENT_R,    0),
+        "Q2AtrousPingMoments"           : (TYPE_FLOAT16,    COMPONENT_RG,   0),
+        "Q2AtrousPongMoments"           : (TYPE_FLOAT16,    COMPONENT_RG,   0),
+
+        # ASVGF gradients (1/3 resolution)
+        "Q2GradLFPing"                  : (TYPE_FLOAT16,    COMPONENT_RG,   FRAMEBUF_FLAGS_FORCE_SIZE_1_3),
+        "Q2GradLFPong"                  : (TYPE_FLOAT16,    COMPONENT_RG,   FRAMEBUF_FLAGS_FORCE_SIZE_1_3),
+        "Q2GradHFSpecPing"              : (TYPE_FLOAT16,    COMPONENT_RG,   FRAMEBUF_FLAGS_FORCE_SIZE_1_3),
+        "Q2GradHFSpecPong"              : (TYPE_FLOAT16,    COMPONENT_RG,   FRAMEBUF_FLAGS_FORCE_SIZE_1_3),
+        "Q2GradSmplPos"                 : (TYPE_UINT32,     COMPONENT_R,    FRAMEBUF_FLAGS_FORCE_SIZE_1_3 | FRAMEBUF_FLAGS_STORE_PREV),
+
+        # Composited ASVGF output (half-res checkerboarded, before interleave)
+        "Q2Color"                       : (TYPE_FLOAT16,    COMPONENT_RGBA, 0),
+
+        # TAAU (temporal antialiasing + upscale)
+        "Q2TaaOutput"                   : (TYPE_FLOAT16,    COMPONENT_RGBA, FRAMEBUF_FLAGS_UPSCALED_SIZE),
+        "Q2TaaHistory"                  : (TYPE_FLOAT16,    COMPONENT_RGBA, FRAMEBUF_FLAGS_UPSCALED_SIZE | FRAMEBUF_FLAGS_STORE_PREV),
+        "Q2RngSeed"                     : (TYPE_UINT32,     COMPONENT_R,    FRAMEBUF_FLAGS_STORE_PREV),
     })
 
 

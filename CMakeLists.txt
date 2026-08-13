@@ -86,6 +86,7 @@ set(Sources
     "Source/Volumetric.cpp"
     "Source/ShadowMap.cpp"
     "Source/GodRays.cpp"
+    "Source/Q2Denoiser.cpp"
 )
 
 

@@ -43,6 +43,7 @@
 #include "Tonemapping.h"
 #include "CubemapManager.h"
 #include "Denoiser.h"
+#include "Q2Denoiser.h"
 #include "UserFunction.h"
 #include "Bloom.h"
 #include "Sharpening.h"
@@ -173,6 +174,7 @@ private:
     std::shared_ptr<PortalList>             portalList;
     std::shared_ptr<LightGrid>              lightGrid;
     std::shared_ptr<Denoiser>               denoiser;
+    std::shared_ptr<Q2Denoiser>             q2Denoiser;
     std::shared_ptr<Tonemapping>            tonemapping;
     std::shared_ptr<ImageComposition>       imageComposition;
     std::shared_ptr<Bloom>                  bloom;

@@ -301,6 +301,11 @@ void VulkanDevice::FillUniform(ShGlobalUniform *gu, const RgDrawFrameInfo &drawI
         }
     }
 
+    // new Q2RTX-style core path switch; the host sets RG_DEBUG_DRAW_Q2RTX_CORE_BIT
+    // when its "rt_core_q2rtx" cvar is enabled
+    gu->coreQ2RTX = drawInfo.pDebugParams != nullptr &&
+                    (drawInfo.pDebugParams->drawFlags & RG_DEBUG_DRAW_Q2RTX_CORE_BIT) ? 1u : 0u;
+
     if( drawInfo.pTexturesParams != nullptr )
     {
         gu->normalMapStrength      = drawInfo.pTexturesParams->normalMapStrength;
@@ -781,7 +786,19 @@ void VulkanDevice::Render(VkCommandBuffer cmd, const RgDrawFrameInfo &drawInfo)
         pathTracer->TraceVolumetric(params);
 
         pathTracer->CalculateGradientsSamples(params);
-        denoiser->Denoise(cmd, frameIndex, uniform);
+
+        // New Q2RTX-style core path: for now identical to the legacy path (the
+        // switch is testable end-to-end). Phase 4.1 replaces this with the full
+        // ASVGF denoiser + checkerboard interleave + TAAU on the new path.
+        if (uniform->GetData()->coreQ2RTX)
+        {
+            q2Denoiser->Denoise(cmd, frameIndex, uniform);
+        }
+        else
+        {
+            denoiser->Denoise(cmd, frameIndex, uniform);
+        }
+
         volumetric->ProcessScattering( cmd, frameIndex, uniform.get(), blueNoise.get() );
         tonemapping->CalculateExposure(cmd, frameIndex, uniform);
     }
@@ -822,7 +839,13 @@ void VulkanDevice::Render(VkCommandBuffer cmd, const RgDrawFrameInfo &drawInfo)
     FramebufferImageIndex accum = FramebufferImageIndex::FB_IMAGE_INDEX_FINAL;
     {
         // upscale finalized image
-        if (renderResolution.IsNvDlssEnabled())
+        if (uniform->GetData()->coreQ2RTX)
+        {
+            // new Q2RTX core path: TAAU replaces the FSR/DLSS upscalers
+            q2Denoiser->ApplyTAAU(cmd, frameIndex, uniform);
+            accum = FramebufferImageIndex::FB_IMAGE_INDEX_UPSCALED_PING;
+        }
+        else if (renderResolution.IsNvDlssEnabled())
         {
             accum = nvDlss->Apply(cmd, frameIndex, 
                                                framebuffers, 

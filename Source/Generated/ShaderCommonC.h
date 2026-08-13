@@ -284,7 +284,7 @@ struct ShGlobalUniform
     float volumeSourceColor[4];
     float volumeDirToSource[4];
     float volumeSourceAsymmetry;
-    float _pad1;
+    uint32_t coreQ2RTX;
     float _pad2;
     float _pad3;
     int32_t instanceGeomInfoOffset[48];
