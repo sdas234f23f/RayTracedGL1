@@ -1,5 +1,28 @@
 # Changelog
 
+## v3.0.0
+
+### Added
+- **Q2RTX-style core rendering path** — a full new pipeline alongside the legacy one, switched at runtime by the host flag `RG_DEBUG_DRAW_Q2RTX_CORE_BIT` (`rt_core_q2rtx` cvar in vkquake-rt):
+  - **ASVGF denoiser** ported from Q2RTX (`asvgf_*.comp`): temporal accumulation, low-frequency (YCoCg luma-SH) and high-frequency/specular atrous filtering, checkerboard interleave
+  - **Checkerboard interleave + TAAU** (Q2RTX `taa`) replaces FSR/DLSS upscaling on the new path; FSR 2/3 and DLSS remain available on the legacy path
+  - ReSTIR (direct/indirect) remains the lighting solution — `CmQ2Adapter` converts its output into the ASVGF color format (LF_SH / LF_COCG / HF / SPEC)
+  - 29 new Q2-format framebuffers (ASVGF colors, history/moments/RNG, TAA history)
+- **Fog volumes** — port of Q2RTX `fog.c` + `find_fog_volumes` / `evaluate_fog`:
+  - New public API: `rgSetFogVolumes`, `RgFogVolume` (AABB via two diagonal points, color, half-extinction distance, optional soft face), `RG_MAX_FOG_VOLUMES` = 8
+  - `CmQ2Fog.comp` blends up to two closest fog volumes along the camera ray in HDR, before tonemapping; works on both the legacy and the new Q2RTX path
+- **Q2RTX noise-aware tone mapping** (histogram + curve + apply, Eilertsen et al. + NVIDIA mods)
+- **Sun shadow map + god rays** — depth-only world render from the sun's view, ray-marched volumetric light at half-res with a bilateral filter
+- **Procedural physical sky** — `RG_SKY_TYPE_PROCEDURAL`: analytic single-scattering atmosphere (Rayleigh + Mie), sun disc, procedural fBm clouds (no textures), HDR cubemap 1024², cached when clouds are off
+
+### Fixed
+- **std140 layout of scalar arrays in generated C headers** — GLSL std140 aligns every array element to 16 bytes, but the header generator emitted scalar arrays with a 4-byte stride (e.g. `uint[8]` became `uint32_t[8]` = 32 bytes instead of 128), shifting every field after the first scalar array by 96 bytes on the CPU side. The GPU then read garbage (fog volumes silently never rendered while host-side diagnostics looked correct). The generator now emits `count*4` scalars per std140 array element
+
+## v2.2.0
+
+### Fixed
+- **Denoised ghosting** — `CmSVGFTemporalAccumulation.comp` reworked to remove ghosting artifacts in the SVGF/ASVGF temporal accumulation
+
 ## v2.1.0
 
 ### Added
