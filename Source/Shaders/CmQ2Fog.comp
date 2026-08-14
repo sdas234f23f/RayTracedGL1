@@ -45,8 +45,20 @@ void main()
     const vec3 cameraRayDir = getRayDir(inUV);
     const vec3 origin = globalUniform.cameraPosition.xyz;
 
+    const ivec2 cbPix = getCheckerboardPix(pix);
+
+    // This pass can only trace the primary camera ray; it cannot follow the
+    // reflected/refracted path (Q2RTX integrates fog per-ray in the path
+    // tracer instead). Skip reflection/refraction pixels - marking them with
+    // fog along the primary ray produces artifacts at reflection boundaries.
+    const float splitFlag = texelFetch(framebufThroughput_Sampler, cbPix, 0).a;
+    if (splitFlag != 0.0)
+    {
+        return;
+    }
+
     // distance to the visible surface (checkerboarded depth)
-    const float depth = texelFetch(framebufDepthWorld_Sampler, getCheckerboardPix(pix), 0).r;
+    const float depth = texelFetch(framebufDepthWorld_Sampler, cbPix, 0).r;
     // for sky pixels extend the fog to the end of the volumes
     const float t = (depth > MAX_RAY_LENGTH) ? 1e6 : max(depth, 0.0);
 

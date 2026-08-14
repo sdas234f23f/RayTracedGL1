@@ -67,8 +67,14 @@ public:
     GodRays &operator=(const GodRays &other) = delete;
     GodRays &operator=(GodRays &&other) noexcept = delete;
 
+    // passIndex: 0 = primary rays, 1 = reflection/refraction rays (the
+    // reflected segment god rays are accumulated on top of the primary result).
     void Trace(VkCommandBuffer cmd, uint32_t frameIndex,
-               const Params &params);
+               const Params &params, uint32_t passIndex = 0);
+
+    // Bilateral upscale of the half-resolution result to full resolution
+    // (Q2RTX god_rays_filter.comp). Call after all Trace passes.
+    void Filter(VkCommandBuffer cmd, uint32_t frameIndex);
 
     void OnShaderReload(const ShaderManager *shaderManager);
 
@@ -96,6 +102,7 @@ private:
 
     VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
     VkPipeline       tracePipeline  = VK_NULL_HANDLE;
+    VkPipeline       filterPipeline = VK_NULL_HANDLE;
 };
 
 }

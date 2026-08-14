@@ -127,6 +127,23 @@ vec4 q2AlphaBlendPremultiplied(vec4 src, vec4 dst)
     return vec4(src.rgb + dst.rgb * (1.0 - src.a), src.a + dst.a * (1.0 - src.a));
 }
 
+// Accumulated premultiplied fog over [0, tMax] for the two closest volumes on
+// the ray (fog1 is closer, fog2 further). Used per ray segment; multiple
+// segments are combined with q2AlphaBlendPremultiplied (nearest in front).
+vec4 q2SegmentFog(uvec4 fog1, uvec4 fog2, float tMax)
+{
+    vec4 acc = vec4(0);
+    if (fog2.w != 0u)
+    {
+        acc = q2AlphaBlendPremultiplied(q2EvaluateFog(fog2, 0.0, tMax), acc);
+    }
+    if (fog1.w != 0u)
+    {
+        acc = q2AlphaBlendPremultiplied(q2EvaluateFog(fog1, 0.0, tMax), acc);
+    }
+    return acc;
+}
+
 // Blends the two closest fog volumes along the ray over [0, tMax] into the surface color.
 vec3 q2ApplyFog(uvec4 fog1, uvec4 fog2, float tMax, vec3 color)
 {

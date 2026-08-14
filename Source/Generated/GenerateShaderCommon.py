@@ -397,6 +397,7 @@ CONST = {
     "DEBUG_SHOW_FLAG_ONLY_INDIRECT_DIFFUSE" : "1 << 7",
     "DEBUG_SHOW_FLAG_LIGHT_GRID"            : "1 << 8",
     "DEBUG_SHOW_FLAG_ALBEDO_WHITE"          : "1 << 9",
+    "DEBUG_SHOW_FLAG_GOD_RAYS"              : "1 << 10",
     
     "MAX_RAY_LENGTH"                        : "10000.0",
 
@@ -872,7 +873,8 @@ FRAMEBUFFERS = {
     
     "ScreenEmisRT"                      : (TYPE_PACK_11,    COMPONENT_RGB,  0),
     "ScreenEmission"                    : (TYPE_PACK_11,    COMPONENT_RGB,  FRAMEBUF_FLAGS_IS_ATTACHMENT),
-    "GodRays"                           : (TYPE_PACK_11,    COMPONENT_RGB,  0),
+    "GodRays"                           : (TYPE_PACK_11,    COMPONENT_RGB,  FRAMEBUF_FLAGS_FORCE_SIZE_1_2),  # half-res intermediate (Q2RTX god_rays.comp / IMG_GODRAYS_INTERMEDIATE)
+    "GodRaysFiltered"                   : (TYPE_PACK_11,    COMPONENT_RGB,  0),  # full-res bilateral upscale (Q2RTX god_rays_filter.comp)
     "BloomInput"                        : (TYPE_PACK_11,    COMPONENT_RGB,  0),
     "Bloom_Mip1"                        : (TYPE_PACK_11,    COMPONENT_RGB,  FRAMEBUF_FLAGS_FORCE_SIZE_1_2  | FRAMEBUF_FLAGS_BILINEAR_SAMPLER),
     "Bloom_Mip2"                        : (TYPE_PACK_11,    COMPONENT_RGB,  FRAMEBUF_FLAGS_FORCE_SIZE_1_4  | FRAMEBUF_FLAGS_BILINEAR_SAMPLER),
@@ -904,11 +906,28 @@ Q2_CORE_ENABLED = True
 if Q2_CORE_ENABLED:
     FRAMEBUFFERS.update({
         # ASVGF input colors, written by the ReSTIR -> ASVGF adapter.
-        # Full resolution (checkerboarded).
-        "Q2ColorLF_SH"                  : (TYPE_FLOAT16,    COMPONENT_RGBA, 0),
-        "Q2ColorLF_COCG"                : (TYPE_FLOAT16,    COMPONENT_RG,   0),
-        "Q2ColorHF"                     : (TYPE_UINT32,     COMPONENT_R,    0),
-        "Q2ColorSpec"                   : (TYPE_UINT32,     COMPONENT_R,    0),
+        # Full resolution (checkerboarded). A/B double buffered (STORE_PREV)
+        # so the gradient-reproject pass can read the previous frame colors.
+        "Q2ColorLF_SH"                  : (TYPE_FLOAT16,    COMPONENT_RGBA, FRAMEBUF_FLAGS_STORE_PREV),
+        "Q2ColorLF_COCG"                : (TYPE_FLOAT16,    COMPONENT_RG,   FRAMEBUF_FLAGS_STORE_PREV),
+        "Q2ColorHF"                     : (TYPE_UINT32,     COMPONENT_R,    FRAMEBUF_FLAGS_STORE_PREV),
+        "Q2ColorSpec"                   : (TYPE_UINT32,     COMPONENT_R,    FRAMEBUF_FLAGS_STORE_PREV),
+
+        # Q2RTX-style path tracer G-buffer (written by the primary/refl passes).
+        # Q2ViewDepth is the view-space ray distance; it becomes NEGATIVE for
+        # reflections/refractions (Q2RTX reflect_refract convention) so the
+        # ASVGF filters don't bleed across reflection boundaries.
+        "Q2ViewDepth"                   : (TYPE_FLOAT32,    COMPONENT_R,    FRAMEBUF_FLAGS_STORE_PREV),
+        "Q2BaseColor"                   : (TYPE_FLOAT16,    COMPONENT_RGBA, FRAMEBUF_FLAGS_STORE_PREV),
+        "Q2Metallic"                    : (TYPE_UNORM8,     COMPONENT_RG,   FRAMEBUF_FLAGS_STORE_PREV),
+        "Q2BounceThroughput"            : (TYPE_FLOAT16,    COMPONENT_RGBA, 0),
+        "Q2Transparent"                 : (TYPE_FLOAT16,    COMPONENT_RGBA, 0),
+        "Q2GodRaysThroughputDist"       : (TYPE_FLOAT16,    COMPONENT_RGBA, 0),
+        # Accumulated premultiplied fog (color.rgb, alpha.a) along the whole
+        # ray path (primary + reflection segments), written by the RT passes
+        # and blended into the final color by the atrous compositing, so the
+        # fog is denoised and temporally consistent (Q2RTX approach).
+        "Q2FogAccum"                    : (TYPE_FLOAT16,    COMPONENT_RGBA, 0),
 
         # ASVGF history (A/B double buffered through STORE_PREV)
         "Q2HistColorLF_SH"              : (TYPE_FLOAT16,    COMPONENT_RGBA, FRAMEBUF_FLAGS_STORE_PREV),

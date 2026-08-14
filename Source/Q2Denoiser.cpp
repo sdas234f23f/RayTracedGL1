@@ -36,6 +36,8 @@ Q2Denoiser::Q2Denoiser(
     device(_device),
     framebuffers(std::move(_framebuffers)),
     pipelineLayout(VK_NULL_HANDLE),
+    gradientReproject(VK_NULL_HANDLE),
+    gradientImg(VK_NULL_HANDLE),
     gradientAtrous{},
     adapter(VK_NULL_HANDLE),
     temporal(VK_NULL_HANDLE),
@@ -47,7 +49,7 @@ Q2Denoiser::Q2Denoiser(
 {
     static_assert(sizeof(atrous) / sizeof(VkPipeline) == COMPUTE_SVGF_ATROUS_ITERATION_COUNT, "Wrong atrous pipeline count");
     static_assert(sizeof(atrousLF) / sizeof(VkPipeline) == COMPUTE_SVGF_ATROUS_ITERATION_COUNT, "Wrong atrousLF pipeline count");
-    static_assert(sizeof(gradientAtrous) / sizeof(VkPipeline) == COMPUTE_ASVGF_GRADIENT_ATROUS_ITERATION_COUNT, "Wrong gradient atrous pipeline count");
+    static_assert(sizeof(gradientAtrous) / sizeof(VkPipeline) == Q2_GRADIENT_ATROUS_ITERATION_COUNT, "Wrong gradient atrous pipeline count");
 
     (void)asManager;
 
@@ -106,26 +108,51 @@ void Q2Denoiser::CreatePipelines(const ShaderManager *shaderManager)
     specInfo.dataSize = sizeof(uint32_t);
     specInfo.pData = &iteration;
 
-    // gradient atrous (produces DISPingGradient for the temporal pass)
+    // Q2RTX-style gradient pipeline (produces Q2GradLF / Q2GradHFSpec for the
+    // temporal pass): reproject + gradient img + gradient atrous (7 iterations).
     {
-        const char *debugNames[COMPUTE_ASVGF_GRADIENT_ATROUS_ITERATION_COUNT] =
+        VkComputePipelineCreateInfo plInfo = {};
+        plInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+        plInfo.layout = pipelineLayout;
+        plInfo.stage = shaderManager->GetStageInfo("CQ2GradientReproject");
+
+        r = vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &plInfo, nullptr, &gradientReproject);
+        VK_CHECKERROR(r);
+
+        SET_DEBUG_NAME(device, gradientReproject, VK_OBJECT_TYPE_PIPELINE, "Q2 ASVGF gradient reproject pipeline");
+    }
+
+    {
+        VkComputePipelineCreateInfo plInfo = {};
+        plInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+        plInfo.layout = pipelineLayout;
+        plInfo.stage = shaderManager->GetStageInfo("CQ2GradientImg");
+
+        r = vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &plInfo, nullptr, &gradientImg);
+        VK_CHECKERROR(r);
+
+        SET_DEBUG_NAME(device, gradientImg, VK_OBJECT_TYPE_PIPELINE, "Q2 ASVGF gradient img pipeline");
+    }
+
+    {
+        const char *debugNames[Q2_GRADIENT_ATROUS_ITERATION_COUNT] =
         {
-            "Q2 ASVGF Gradient atrous iteration #0 pipeline",
-            "Q2 ASVGF Gradient atrous iteration #1 pipeline",
-            "Q2 ASVGF Gradient atrous iteration #2 pipeline",
-            "Q2 ASVGF Gradient atrous iteration #3 pipeline",
+            "Q2 ASVGF gradient atrous iteration #0 pipeline",
+            "Q2 ASVGF gradient atrous iteration #1 pipeline",
+            "Q2 ASVGF gradient atrous iteration #2 pipeline",
+            "Q2 ASVGF gradient atrous iteration #3 pipeline",
+            "Q2 ASVGF gradient atrous iteration #4 pipeline",
+            "Q2 ASVGF gradient atrous iteration #5 pipeline",
+            "Q2 ASVGF gradient atrous iteration #6 pipeline",
         };
 
         VkComputePipelineCreateInfo plInfo = {};
         plInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
         plInfo.layout = pipelineLayout;
-        plInfo.stage = shaderManager->GetStageInfo("CASVGFGradientAtrous");
-        plInfo.stage.pSpecializationInfo = &specInfo;
+        plInfo.stage = shaderManager->GetStageInfo("CQ2GradientAtrous");
 
-        for (uint32_t i = 0; i < COMPUTE_ASVGF_GRADIENT_ATROUS_ITERATION_COUNT; i++)
+        for (uint32_t i = 0; i < Q2_GRADIENT_ATROUS_ITERATION_COUNT; i++)
         {
-            iteration = i;
-
             r = vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &plInfo, nullptr, &gradientAtrous[i]);
             VK_CHECKERROR(r);
 
@@ -247,6 +274,8 @@ void Q2Denoiser::CreatePipelines(const ShaderManager *shaderManager)
 
 void Q2Denoiser::DestroyPipelines()
 {
+    vkDestroyPipeline(device, gradientReproject, nullptr);
+    vkDestroyPipeline(device, gradientImg, nullptr);
     vkDestroyPipeline(device, adapter, nullptr);
     vkDestroyPipeline(device, temporal, nullptr);
     vkDestroyPipeline(device, interleave, nullptr);
@@ -271,6 +300,14 @@ void Q2Denoiser::DestroyPipelines()
         p = VK_NULL_HANDLE;
     }
 
+    for (VkPipeline &p : gradientAtrous)
+    {
+        vkDestroyPipeline(device, p, nullptr);
+        p = VK_NULL_HANDLE;
+    }
+
+    gradientReproject = VK_NULL_HANDLE;
+    gradientImg = VK_NULL_HANDLE;
     adapter = VK_NULL_HANDLE;
     temporal = VK_NULL_HANDLE;
     interleave = VK_NULL_HANDLE;
@@ -312,21 +349,22 @@ void Q2Denoiser::Denoise(
     const uint32_t wgGradX = Utils::GetWorkGroupCount(uniform->GetData()->renderWidth / COMPUTE_ASVGF_STRATA_SIZE, COMPUTE_GRADIENT_ATROUS_GROUP_SIZE_X);
     const uint32_t wgGradY = Utils::GetWorkGroupCount(uniform->GetData()->renderHeight / COMPUTE_ASVGF_STRATA_SIZE, COMPUTE_GRADIENT_ATROUS_GROUP_SIZE_X);
 
-    // gradient atrous -> DISPingGradient (consumed by the temporal pass)
+    // Q2RTX-style gradient pipeline (produces Q2GradLF / Q2GradHFSpec for the
+    // temporal pass): reproject -> gradient img -> gradient atrous (7 iters).
     {
-        CmdLabel label(cmd, "Q2 ASVGF gradient atrous");
+        CmdLabel label(cmd, "Q2 ASVGF gradient reproject");
 
-        for (uint32_t i = 0; i < COMPUTE_ASVGF_GRADIENT_ATROUS_ITERATION_COUNT; i++)
+        FI fs[] =
         {
-            FI fs[] =
-            {
-                (i % 2 == 0) ? FI::FB_IMAGE_INDEX_D_I_S_PING_GRADIENT : FI::FB_IMAGE_INDEX_D_I_S_PONG_GRADIENT,
-            };
-            framebuffers->BarrierMultiple(cmd, frameIndex, fs);
+            FI::FB_IMAGE_INDEX_Q2_GRAD_SMPL_POS_PREV,
+            FI::FB_IMAGE_INDEX_Q2_VIEW_DEPTH_PREV,
+            FI::FB_IMAGE_INDEX_Q2_COLOR_H_F_PREV,
+            FI::FB_IMAGE_INDEX_Q2_COLOR_SPEC_PREV,
+        };
+        framebuffers->BarrierMultiple(cmd, frameIndex, fs);
 
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, gradientAtrous[i]);
-            vkCmdDispatch(cmd, wgGradX, wgGradY, 1);
-        }
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, gradientReproject);
+        vkCmdDispatch(cmd, wgGradX, wgGradY, 1);
     }
 
     // ReSTIR outputs -> Q2RTX ASVGF channel format
@@ -347,6 +385,45 @@ void Q2Denoiser::Denoise(
         vkCmdDispatch(cmd, wgX, wgY, 1);
     }
 
+    {
+        CmdLabel label(cmd, "Q2 ASVGF gradient img");
+
+        FI fs[] =
+        {
+            FI::FB_IMAGE_INDEX_Q2_GRAD_SMPL_POS,
+            FI::FB_IMAGE_INDEX_Q2_GRAD_H_F_SPEC_PING,
+            FI::FB_IMAGE_INDEX_Q2_GRAD_L_F_PING,
+            FI::FB_IMAGE_INDEX_Q2_HIST_COLOR_L_F_S_H_PREV,
+            FI::FB_IMAGE_INDEX_Q2_COLOR_L_F_S_H,
+            FI::FB_IMAGE_INDEX_Q2_COLOR_H_F,
+            FI::FB_IMAGE_INDEX_Q2_COLOR_SPEC,
+            FI::FB_IMAGE_INDEX_MOTION,
+        };
+        framebuffers->BarrierMultiple(cmd, frameIndex, fs);
+
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, gradientImg);
+        vkCmdDispatch(cmd, wgGradX, wgGradY, 1);
+    }
+
+    {
+        CmdLabel label(cmd, "Q2 ASVGF gradient atrous");
+
+        for (uint32_t i = 0; i < Q2_GRADIENT_ATROUS_ITERATION_COUNT; i++)
+        {
+            // input ping/pong for this iteration (see CmQ2GradientAtrous.comp)
+            FI fs[] =
+            {
+                (i % 2 == 0) ? FI::FB_IMAGE_INDEX_Q2_GRAD_L_F_PING : FI::FB_IMAGE_INDEX_Q2_GRAD_L_F_PONG,
+                (i % 2 == 0) ? FI::FB_IMAGE_INDEX_Q2_GRAD_H_F_SPEC_PING : FI::FB_IMAGE_INDEX_Q2_GRAD_H_F_SPEC_PONG,
+            };
+            framebuffers->BarrierMultiple(cmd, frameIndex, fs);
+
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, gradientAtrous[i]);
+            vkCmdPushConstants(cmd, pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(uint32_t), &i);
+            vkCmdDispatch(cmd, wgGradX, wgGradY, 1);
+        }
+    }
+
     // temporal accumulation
     {
         CmdLabel label(cmd, "Q2 ASVGF temporal");
@@ -364,7 +441,8 @@ void Q2Denoiser::Denoise(
             FI::FB_IMAGE_INDEX_NORMAL_GEOMETRY,
             FI::FB_IMAGE_INDEX_METALLIC_ROUGHNESS,
             FI::FB_IMAGE_INDEX_THROUGHPUT,
-            FI::FB_IMAGE_INDEX_D_I_S_PING_GRADIENT,
+            FI::FB_IMAGE_INDEX_Q2_GRAD_L_F_PONG,
+            FI::FB_IMAGE_INDEX_Q2_GRAD_H_F_SPEC_PONG,
         };
         framebuffers->BarrierMultiple(cmd, frameIndex, fs);
 
@@ -445,6 +523,7 @@ void Q2Denoiser::Denoise(
                         FI::FB_IMAGE_INDEX_Q2_ATROUS_PING_L_F_C_O_C_G,
                         FI::FB_IMAGE_INDEX_Q2_HIST_COLOR_L_F_S_H,
                         FI::FB_IMAGE_INDEX_Q2_HIST_COLOR_L_F_C_O_C_G,
+                        FI::FB_IMAGE_INDEX_Q2_FOG_ACCUM,
                     };
                     framebuffers->BarrierMultiple(cmd, frameIndex, fs);
                     break;

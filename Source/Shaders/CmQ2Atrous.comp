@@ -70,7 +70,7 @@ filter_image(
     }
 
     vec3 normal_center = texelFetchNormal(ipos);
-    float depth_center = texelFetch(framebufDepthWorld_Sampler, ipos, 0).r;
+    float depth_center = texelFetch(framebufQ2ViewDepth_Sampler, ipos, 0).r;
     float fwidth_depth = texelFetch(framebufDepthGrad_Sampler, ipos, 0).r;
     float roughness_center = texelFetch(framebufMetallicRoughness_Sampler, ipos, 0).y;
 
@@ -139,7 +139,7 @@ filter_image(
 
             vec3 normal = texelFetchNormal(p);
 
-            float depth = texelFetch(framebufDepthWorld_Sampler, p, 0).r;
+            float depth = texelFetch(framebufQ2ViewDepth_Sampler, p, 0).r;
             float roughness = texelFetch(framebufMetallicRoughness_Sampler, p, 0).y;
 
             float dist_z = abs(depth_center - depth) * fwidth_depth * Q2_FLT_ATROUS_DEPTH;
@@ -194,7 +194,7 @@ filter_image(
 // Bilinear/bilateral interpolation of the LF channel data (denoised at 1/3 resolution)
 Q2SH interpolate_lf(sampler2D img_lf_shY, sampler2D img_lf_CoCg, ivec2 ipos)
 {
-    float depth_center = texelFetch(framebufDepthWorld_Sampler, ipos, 0).r;
+    float depth_center = texelFetch(framebufQ2ViewDepth_Sampler, ipos, 0).r;
     float fwidth_depth = texelFetch(framebufDepthGrad_Sampler, ipos, 0).r;
     vec3 geo_normal_center = texelFetchNormalGeometry(ipos);
 
@@ -218,7 +218,7 @@ Q2SH interpolate_lf(sampler2D img_lf_shY, sampler2D img_lf_CoCg, ivec2 ipos)
         ivec2 p_lowres = ivec2(pos_ld) + off[i];
         ivec2 p_hires = p_lowres * Q2_GRAD_DWN + ivec2(1);
 
-        float p_depth = texelFetch(framebufDepthWorld_Sampler, p_hires, 0).r;
+        float p_depth = texelFetch(framebufQ2ViewDepth_Sampler, p_hires, 0).r;
         vec3 p_geo_normal = texelFetchNormalGeometry(p_hires);
 
         float p_w = w[i];
@@ -347,6 +347,12 @@ main()
         {
             illuminated = albedo * throughput;
         }
+
+        // Blend the per-ray accumulated fog (Q2RTX approach: fog is traced in
+        // the primary/refl passes and accumulated over each path segment), so
+        // it is part of the denoised, temporally consistent signal.
+        const vec4 fogAccum = texelFetch(framebufQ2FogAccum_Sampler, ipos, 0);
+        illuminated = fogAccum.rgb + illuminated * (1.0 - fogAccum.a);
 
         imageStore(framebufQ2Color, ipos, vec4(max(vec3(0.0), illuminated), 0));
     }

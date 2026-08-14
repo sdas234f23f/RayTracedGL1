@@ -913,6 +913,8 @@ typedef enum RgDebugDrawFlagBits
     // Internal: enables the new Q2RTX-style core rendering path.
     // The host sets this bit when the "rt_core_q2rtx" cvar is enabled.
     RG_DEBUG_DRAW_Q2RTX_CORE_BIT = 1024,
+    // Internal: shows the raw god rays buffer (volumetric sunlight).
+    RG_DEBUG_DRAW_GOD_RAYS_BIT = 2048,
 } RgDebugDrawFlagBits;
 typedef RgFlags RgDebugDrawFlags;
 

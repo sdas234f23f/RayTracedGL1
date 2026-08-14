@@ -65,7 +65,7 @@ filter_image(
 
     // Load the parameters of the anchor pixel
     vec3 geo_normal_center = texelFetchNormalGeometry(ipos_hires);
-    float depth_center = texelFetch(framebufDepthWorld_Sampler, ipos_hires, 0).r;
+    float depth_center = texelFetch(framebufQ2ViewDepth_Sampler, ipos_hires, 0).r;
     float fwidth_depth = texelFetch(framebufDepthGrad_Sampler, ipos_hires, 0).r;
 
     const int step_size = int(1u << (push.iteration - 1));
@@ -104,7 +104,7 @@ filter_image(
             // The lighting detail will be partially preserved by spherical harmonics.
             vec3 geo_normal = texelFetchNormalGeometry(p_hires);
 
-            float depth = texelFetch(framebufDepthWorld_Sampler, p_hires, 0).r;
+            float depth = texelFetch(framebufQ2ViewDepth_Sampler, p_hires, 0).r;
 
             float dist_z = abs(depth_center - depth) * fwidth_depth * Q2_FLT_ATROUS_DEPTH;
             w *= exp(-dist_z / float(step_size * Q2_GRAD_DWN));

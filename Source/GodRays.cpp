@@ -151,10 +151,18 @@ void RTGL1::GodRays::CreatePipelineLayout()
         blueNoise->GetDescSetLayout(),  // 4: blue noise
     };
 
+    // passIndex (CmGodRays.comp): 0 = primary, 1 = reflections
+    VkPushConstantRange pushConstant = {};
+    pushConstant.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    pushConstant.offset = 0;
+    pushConstant.size = sizeof(uint32_t);
+
     VkPipelineLayoutCreateInfo layoutInfo = {};
     layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     layoutInfo.setLayoutCount = static_cast<uint32_t>(std::size(setLayouts));
     layoutInfo.pSetLayouts = setLayouts;
+    layoutInfo.pushConstantRangeCount = 1;
+    layoutInfo.pPushConstantRanges = &pushConstant;
 
     r = vkCreatePipelineLayout(device, &layoutInfo, nullptr, &pipelineLayout);
     VK_CHECKERROR(r);
@@ -166,6 +174,7 @@ void RTGL1::GodRays::CreatePipelines(const ShaderManager *shaderManager)
 {
     VkResult r;
 
+    // half-res ray march (CmGodRays.comp)
     VkComputePipelineCreateInfo pipelineInfo = {};
     pipelineInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
     pipelineInfo.layout = pipelineLayout;
@@ -175,6 +184,14 @@ void RTGL1::GodRays::CreatePipelines(const ShaderManager *shaderManager)
     VK_CHECKERROR(r);
 
     SET_DEBUG_NAME(device, tracePipeline, VK_OBJECT_TYPE_PIPELINE, "God rays trace pipeline");
+
+    // full-res bilateral upscale (CmGodRaysFilter.comp)
+    pipelineInfo.stage = shaderManager->GetStageInfo("CGodRaysFilter");
+
+    r = vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &filterPipeline);
+    VK_CHECKERROR(r);
+
+    SET_DEBUG_NAME(device, filterPipeline, VK_OBJECT_TYPE_PIPELINE, "God rays filter pipeline");
 }
 
 void RTGL1::GodRays::DestroyPipelines()
@@ -184,6 +201,11 @@ void RTGL1::GodRays::DestroyPipelines()
         vkDestroyPipeline(device, tracePipeline, nullptr);
         tracePipeline = VK_NULL_HANDLE;
     }
+    if (filterPipeline)
+    {
+        vkDestroyPipeline(device, filterPipeline, nullptr);
+        filterPipeline = VK_NULL_HANDLE;
+    }
 }
 
 void RTGL1::GodRays::OnShaderReload(const ShaderManager *shaderManager)
@@ -192,9 +214,9 @@ void RTGL1::GodRays::OnShaderReload(const ShaderManager *shaderManager)
     CreatePipelines(shaderManager);
 }
 
-void RTGL1::GodRays::Trace(VkCommandBuffer cmd, uint32_t frameIndex, const Params &params)
+void RTGL1::GodRays::Trace(VkCommandBuffer cmd, uint32_t frameIndex, const Params &params, uint32_t passIndex)
 {
-    CmdLabel label(cmd, "God rays");
+    CmdLabel label(cmd, passIndex == 0 ? "God rays" : "God rays (reflections)");
 
     if (mappedParams)
     {
@@ -207,6 +229,8 @@ void RTGL1::GodRays::Trace(VkCommandBuffer cmd, uint32_t frameIndex, const Param
         FI::FB_IMAGE_INDEX_VIEW_DIRECTION,
         FI::FB_IMAGE_INDEX_THROUGHPUT,
         FI::FB_IMAGE_INDEX_DEPTH_WORLD,
+        FI::FB_IMAGE_INDEX_Q2_VIEW_DEPTH,
+        FI::FB_IMAGE_INDEX_Q2_GOD_RAYS_THROUGHPUT_DIST,
         FI::FB_IMAGE_INDEX_GOD_RAYS,
     };
     framebuffers->BarrierMultiple(cmd, frameIndex, inputs);
@@ -222,6 +246,45 @@ void RTGL1::GodRays::Trace(VkCommandBuffer cmd, uint32_t frameIndex, const Param
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, tracePipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout,
                             0, static_cast<uint32_t>(std::size(sets)), sets, 0, nullptr);
+
+    vkCmdPushConstants(cmd, pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(uint32_t), &passIndex);
+
+    // half-resolution pass (Q2RTX god_rays.comp runs at half res and is
+    // upscaled by the filter pass)
+    const uint32_t halfW = (uniform->GetData()->renderWidth + 1) / 2;
+    const uint32_t halfH = (uniform->GetData()->renderHeight + 1) / 2;
+    const uint32_t wgCountX = Utils::GetWorkGroupCount(halfW, 16);
+    const uint32_t wgCountY = Utils::GetWorkGroupCount(halfH, 16);
+
+    vkCmdDispatch(cmd, wgCountX, wgCountY, 1);
+}
+
+void RTGL1::GodRays::Filter(VkCommandBuffer cmd, uint32_t frameIndex)
+{
+    CmdLabel label(cmd, "God rays filter");
+
+    using FI = FramebufferImageIndex;
+    FI inputs[] = {
+        FI::FB_IMAGE_INDEX_GOD_RAYS,            // half-res intermediate, read
+        FI::FB_IMAGE_INDEX_Q2_VIEW_DEPTH,       // full-res depth for the bilateral weight
+        FI::FB_IMAGE_INDEX_GOD_RAYS_FILTERED,   // full-res result, written
+    };
+    framebuffers->BarrierMultiple(cmd, frameIndex, inputs);
+
+    VkDescriptorSet sets[] = {
+        shadowMap->GetDescSet(),              // 0 (unused by the filter)
+        paramsDescSet,                        // 1 (unused by the filter)
+        framebuffers->GetDescSet(frameIndex), // 2
+        uniform->GetDescSet(frameIndex),      // 3
+        blueNoise->GetDescSet(),              // 4 (unused by the filter)
+    };
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, filterPipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout,
+                            0, static_cast<uint32_t>(std::size(sets)), sets, 0, nullptr);
+
+    const uint32_t passIndex = 0;
+    vkCmdPushConstants(cmd, pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(uint32_t), &passIndex);
 
     const uint32_t wgCountX = Utils::GetWorkGroupCount(uniform->GetData()->renderWidth, 16);
     const uint32_t wgCountY = Utils::GetWorkGroupCount(uniform->GetData()->renderHeight, 16);

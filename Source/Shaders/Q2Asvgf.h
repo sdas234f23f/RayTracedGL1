@@ -44,10 +44,14 @@
 #define Q2_STORAGE_SCALE_SPEC 32.0
 #define Q2_STORAGE_SCALE_HDR 128.0
 
-// ASVGF tuning parameters (Q2RTX cvars defaults, hardcoded for now)
-#define Q2_FLT_ANTILAG_HF 1.0
+// ASVGF tuning parameters. Base values are the Q2RTX cvars defaults, but the
+// HF/SPEC antilag is reduced (1.0 -> 0.5, 2.0 -> 1.0) because the lighting
+// input here is RTGL1 ReSTIR, which is noisier per-frame than the Q2RTX path
+// tracer; the old RTGL1 gradient estimation used ~0.25*rel_diff effective
+// sensitivity and showed much less dark-area noise.
+#define Q2_FLT_ANTILAG_HF 0.5
 #define Q2_FLT_ANTILAG_LF 0.2
-#define Q2_FLT_ANTILAG_SPEC 2.0
+#define Q2_FLT_ANTILAG_SPEC 1.0
 #define Q2_FLT_ANTILAG_SPEC_MOTION 0.004
 #define Q2_FLT_GRAD_WEAPON 0.25
 #define Q2_FLT_MIN_ALPHA_COLOR_HF 0.02

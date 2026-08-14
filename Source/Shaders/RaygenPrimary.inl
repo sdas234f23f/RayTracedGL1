@@ -52,6 +52,7 @@
 #define DESC_SET_PORTALS 9
 #define LIGHT_SAMPLE_METHOD (LIGHT_SAMPLE_METHOD_NONE)
 #include "RaygenCommon.h"
+#include "Q2Fog.h"
 
 vec2 getMotionVectorForUpscaler(const vec2 motionCurToPrev)
 {
@@ -79,13 +80,43 @@ vec2 getMotionForInfinitePoint(const ivec2 pix)
     return screenSpacePrev - screenSpaceCur;
 }
 
+// Q2RTX-style path tracer G-buffer, written on the new Q2 core path only.
+// These feed the Q2 ASVGF gradient pipeline (phase 4.4.2) and the Q2RTX
+// reflections (phase 4.4.3). Q2ViewDepth is the ray distance and is NEGATIVE
+// for reflection/refraction surfaces (Q2RTX reflect_refract convention) so
+// the ASVGF filters don't bleed across reflection boundaries.
+void storeQ2GBuffer(
+    const ivec2 pix,
+    const vec3 baseColor, float specularFactor,
+    float metallic, float roughness,
+    float depth,
+    float halfConeAngle, float distToLight,
+    const vec3 transparentColor, float transparentAlpha,
+    const vec4 fogAccum)
+{
+    if (globalUniform.coreQ2RTX == 0)
+    {
+        return;
+    }
+
+    imageStore(framebufQ2ViewDepth,          pix, vec4(depth));
+    imageStore(framebufQ2BaseColor,          pix, vec4(baseColor, specularFactor));
+    imageStore(framebufQ2Metallic,           pix, vec4(metallic, roughness, 0.0, 0.0));
+    imageStore(framebufQ2BounceThroughput,   pix, vec4(1.0, 1.0, 1.0, halfConeAngle));
+    imageStore(framebufQ2Transparent,        pix, vec4(transparentColor, transparentAlpha));
+    imageStore(framebufQ2GodRaysThroughputDist, pix, vec4(1.0, 1.0, 1.0, distToLight));
+    imageStore(framebufQ2RngSeed,            pix, uvec4(getRandomSeed(pix, globalUniform.frameId)));
+    imageStore(framebufQ2FogAccum,           pix, fogAccum);
+}
+
 void storeSky(
     const ivec2 pix, const vec3 rayDir, bool calculateSkyAndStoreToAlbedo, const vec3 throughput,
 #ifdef RAYGEN_PRIMARY_SHADER
-    float firstHitDepthNDC )
+    float firstHitDepthNDC,
 #else
-    bool wasSplit )
+    bool wasSplit,
 #endif
+    const vec4 fogAccum )
 {
     imageStore(framebufIsSky, pix, ivec4(1));
 
@@ -103,6 +134,9 @@ void storeSky(
         }
             
         imageStore(framebufAlbedo, getRegularPixFromCheckerboardPix(pix), vec4(albedo, 0.0));
+
+        // Q2RTX-style G-buffer (sky = empty surface, env color in transparent)
+        storeQ2GBuffer(pix, albedo, 0.0, 0.0, 1.0, MAX_RAY_LENGTH * 2.0, 0.0, MAX_RAY_LENGTH * 2.0, albedo, 1.0, fogAccum);
     }
 
     vec2 m = getMotionForInfinitePoint(pix);
@@ -286,8 +320,17 @@ void main()
         vec3 throughput = vec3(1.0);
         // throughput *= getMediaTransmittance(currentRayMedia, pow(abs(dot(cameraRayDir, globalUniform.worldUpVector.xyz)), -3));
 
+        // Q2RTX-style fog over the primary segment, extended to the end of the volumes
+        vec4 q2FogAccum = vec4(0);
+        if (globalUniform.coreQ2RTX != 0)
+        {
+            uvec4 q2SkyFog1, q2SkyFog2;
+            q2FindFogVolumes(cameraOrigin, cameraRayDir, 0.0, 1e6, q2SkyFog1, q2SkyFog2);
+            q2FogAccum = q2SegmentFog(q2SkyFog1, q2SkyFog2, 1e6);
+        }
+
         // if sky is a rasterized geometry, it was already rendered to albedo framebuf 
-        storeSky(pix, cameraRayDir, globalUniform.skyType != SKY_TYPE_RASTERIZED_GEOMETRY, throughput, MAX_RAY_LENGTH * 2.0);
+        storeSky(pix, cameraRayDir, globalUniform.skyType != SKY_TYPE_RASTERIZED_GEOMETRY, throughput, MAX_RAY_LENGTH * 2.0, q2FogAccum);
         return;
     }
 
@@ -328,6 +371,15 @@ void main()
     // as reflections/refraction only may be losely represented via rasterization
     imageStore(framebufDepthNdc,            getRegularPixFromCheckerboardPix(pix), vec4(clamp(firstHitDepthNDC, 0.0, 1.0)));
     imageStore(framebufMotionDlss,          getRegularPixFromCheckerboardPix(pix), vec4(getMotionVectorForUpscaler(motionCurToPrev), 0.0, 0.0));
+
+    // Q2RTX-style G-buffer. specular factor = dielectric F0 (0.04) to metal albedo.
+    // Accumulate the fog over the primary segment (Q2RTX approach).
+    uvec4 q2Fog1, q2Fog2;
+    q2FindFogVolumes(cameraOrigin, cameraRayDir, 0.0, firstHitDepthLinear, q2Fog1, q2Fog2);
+    const vec4 q2FogAccum = q2SegmentFog(q2Fog1, q2Fog2, firstHitDepthLinear);
+    storeQ2GBuffer(pix, h.albedo, mix(0.04, 1.0, h.metallic), h.metallic, h.roughness,
+                   firstHitDepthLinear, 0.5 * length(cameraRayDir - cameraRayDirAX), firstHitDepthLinear,
+                   vec3(0.0), 0.0, q2FogAccum);
 }
 #endif
 
@@ -374,6 +426,10 @@ void main()
     ShPayload currentPayload;
     currentPayload.instIdAndIndex           = primaryToReflRefrBuf.g;
 
+    // Q2RTX-style accumulated fog from the primary pass; the reflection
+    // segments are blended on top of it below (nearest fog in front).
+    vec4 q2FogAccum = texelFetch(framebufQ2FogAccum_Sampler, pix, 0);
+
 
 
     RayCone rayCone;
@@ -381,6 +437,9 @@ void main()
     rayCone.spreadAngle = globalUniform.cameraRayConeSpreadAngle;
 
     float fullPathLength = firstHitDepthLinear;
+    // length of the last reflected/refracted segment (used by the god rays
+    // reflection pass to march only along the reflected segment, Q2RTX-style)
+    float q2LastSegmentLen = 0.0;
     vec3 prevHitPosition = h.hitPosition;
     bool wasSplit = false;
     bool wasPortal = false;
@@ -537,7 +596,12 @@ void main()
         {
             throughput *= getMediaTransmittance(currentRayMedia, pow(abs(dot(rayDir, globalUniform.worldUpVector.xyz)), -3));
 
-            storeSky(pix, rayDir, true, throughput, wasSplit);
+            // add the fog over this (missed, sky) segment to the accumulated fog
+            uvec4 q2SegFog1, q2SegFog2;
+            q2FindFogVolumes(rayOrigin, rayDir, 0.0, 1e6, q2SegFog1, q2SegFog2);
+            q2FogAccum = q2AlphaBlendPremultiplied(q2FogAccum, q2SegmentFog(q2SegFog1, q2SegFog2, 1e6));
+
+            storeSky(pix, rayDir, true, throughput, wasSplit, q2FogAccum);
             return;  
         }
 
@@ -553,11 +617,16 @@ void main()
             emis
         );
 
+        // Accumulate the fog along this reflection/refraction segment
+        uvec4 q2SegFog1, q2SegFog2;
+        q2FindFogVolumes(rayOrigin, rayDir, 0.0, rayLen, q2SegFog1, q2SegFog2);
+        q2FogAccum = q2AlphaBlendPremultiplied(q2FogAccum, q2SegmentFog(q2SegFog1, q2SegFog2, rayLen));
 
         hitInfoWasOverwritten = true;
         throughput *= getMediaTransmittance(currentRayMedia, rayLen);
         propagateRayCone(rayCone, rayLen);
         fullPathLength += rayLen;
+        q2LastSegmentLen = rayLen;
         prevHitPosition = h.hitPosition;
         screenEmission += h.albedo * emis * throughput;
         acidFog += getGlowingMediaFog(currentRayMedia, rayLen) * (doSplit ? 2.0 : 1.0);
@@ -583,5 +652,13 @@ void main()
     imageStore(framebufVisibilityBuffer,    pix, packVisibilityBuffer(currentPayload));
     imageStore(framebufViewDirection,       pix, vec4(rayDir, 0.0));
     imageStore(framebufThroughput,          pix, vec4(throughput, wasSplit ? 1.0 : -1.0));
+
+    // Q2RTX-style G-buffer. Negative depth so the ASVGF filters don't bleed
+    // across reflection/refraction boundaries; the half-cone angle for the
+    // accumulated-cone LOD is taken from the primary pass (Q2RTX convention).
+    const float q2HalfConeAngle = texelFetch(framebufQ2BounceThroughput_Sampler, pix, 0).w;
+    storeQ2GBuffer(pix, h.albedo, mix(0.04, 1.0, h.metallic), h.metallic, h.roughness,
+                   -fullPathLength, q2HalfConeAngle, q2LastSegmentLen,
+                   vec3(0.0), 0.0, q2FogAccum);
 }
 #endif

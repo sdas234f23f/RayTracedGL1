@@ -52,7 +52,6 @@ public:
     void Denoise(
         VkCommandBuffer cmd, uint32_t frameIndex,
         const std::shared_ptr<const GlobalUniform> &uniform);
-
     // TAAU upscaler for the new core path. Takes the tonemapped Final at render
     // resolution and writes UpscaledPing at the upscaled resolution.
     void ApplyTAAU(
@@ -72,14 +71,22 @@ private:
     void DestroyPipelines();
 
 private:
+    // Number of a-trous iterations of the Q2RTX-style gradient filter
+    // (CmQ2GradientAtrous.comp). 7 like Q2RTX: LF in all, HF/SPEC in the
+    // first 3, LF normalized in the last one.
+    static constexpr uint32_t Q2_GRADIENT_ATROUS_ITERATION_COUNT = 7;
+
     VkDevice device;
 
     std::shared_ptr<Framebuffers> framebuffers;
 
     VkPipelineLayout pipelineLayout;
 
-    // gradient atrous (produces DISPingGradient, consumed by the temporal pass)
-    VkPipeline gradientAtrous[4];
+    // Q2RTX-style gradient pipeline (produces Q2GradLF / Q2GradHFSpec,
+    // consumed by the temporal pass): reproject + gradient img + gradient atrous.
+    VkPipeline gradientReproject;
+    VkPipeline gradientImg;
+    VkPipeline gradientAtrous[Q2_GRADIENT_ATROUS_ITERATION_COUNT];
 
     VkPipeline adapter;
     VkPipeline temporal;

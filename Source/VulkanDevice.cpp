@@ -22,6 +22,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <stdexcept>
 
@@ -298,6 +299,10 @@ void VulkanDevice::FillUniform(ShGlobalUniform *gu, const RgDrawFrameInfo &drawI
         if( fs & RG_DEBUG_DRAW_LIGHT_GRID_BIT )
         {
             gu->debugShowFlags |= DEBUG_SHOW_FLAG_LIGHT_GRID;
+        }
+        if( fs & RG_DEBUG_DRAW_GOD_RAYS_BIT )
+        {
+            gu->debugShowFlags |= DEBUG_SHOW_FLAG_GOD_RAYS;
         }
     }
 
@@ -792,48 +797,82 @@ void VulkanDevice::Render(VkCommandBuffer cmd, const RgDrawFrameInfo &drawInfo)
         decalManager->Draw(cmd, frameIndex, uniform, framebuffers, textureManager);
 
         // volumetric sunlight: render the shadow map and ray march god rays
+        bool godRaysActive = false;
+        GodRays::Params gr = {};
         {
-            float sunColor[3], sunDir[3], sunAngularRadius;
-            if (scene->GetLightManager()->GetLastDirectionalLight(sunColor, sunDir, &sunAngularRadius))
+            float sunColor[3], sunDir[3], sunAngularRadius = 0.0047f;
+            if (!scene->GetLightManager()->GetLastDirectionalLight(sunColor, sunDir, &sunAngularRadius))
             {
-                float aabbMin[3], aabbMax[3];
-                if (scene->HasAABB())
+                // No sun light (rt_sun 0): follow the sun that is visible in the
+                // procedural sky (same fallback as DrawProcedural), so the
+                // volumetric sun shafts match the visible sun (Q2RTX behavior).
+                // sunDir is the light direction (FROM the sun toward the scene),
+                // i.e. opposite of the sky's toward-sun fallback.
+                const float towardSun[3] = { 0.3f, 0.5f, 0.8f };
+                const float len = std::sqrt(towardSun[0]*towardSun[0] + towardSun[1]*towardSun[1] + towardSun[2]*towardSun[2]);
+                sunDir[0] = -towardSun[0] / len;
+                sunDir[1] = -towardSun[1] / len;
+                sunDir[2] = -towardSun[2] / len;
+                sunColor[0] = uniform->GetData()->skyColorDefault[0];
+                sunColor[1] = uniform->GetData()->skyColorDefault[1];
+                sunColor[2] = uniform->GetData()->skyColorDefault[2];
+            }
+
+            float aabbMin[3], aabbMax[3];
+            if (scene->HasAABB())
+            {
+                scene->GetAABB(aabbMin, aabbMax);
+
+                float shadowMapVP[16];
+                float shadowMapDepthScale = 0.0f;
+
+                const auto &staticCollector  = scene->GetASManager()->GetStaticCollector();
+                const auto &dynamicCollector = scene->GetASManager()->GetDynamicCollector(frameIndex);
+
+                if (shadowMap->Render(cmd, sunDir, aabbMin, aabbMax,
+                                      staticCollector.get(), dynamicCollector.get(),
+                                      shadowMapVP, &shadowMapDepthScale))
                 {
-                    scene->GetAABB(aabbMin, aabbMax);
+                    // The god rays sun direction points TOWARD the sun (Q2RTX
+                    // convention): the phase function peaks around the sun and
+                    // the shadow bias pushes samples away from it.
+                    gr.sunDirection[0] = -sunDir[0];
+                    gr.sunDirection[1] = -sunDir[1];
+                    gr.sunDirection[2] = -sunDir[2];
+                    gr.sunColor[0] = sunColor[0];
+                    gr.sunColor[1] = sunColor[1];
+                    gr.sunColor[2] = sunColor[2];
 
-                    float shadowMapVP[16];
-                    float shadowMapDepthScale = 0.0f;
-
-                    const auto &staticCollector  = scene->GetASManager()->GetStaticCollector();
-                    const auto &dynamicCollector = scene->GetASManager()->GetDynamicCollector(frameIndex);
-
-                    if (shadowMap->Render(cmd, sunDir, aabbMin, aabbMax,
-                                          staticCollector.get(), dynamicCollector.get(),
-                                          shadowMapVP, &shadowMapDepthScale))
+                    for (int k = 0; k < 3; k++)
                     {
-                        GodRays::Params gr = {};
-                        gr.sunDirection[0] = sunDir[0];
-                        gr.sunDirection[1] = sunDir[1];
-                        gr.sunDirection[2] = sunDir[2];
-                        gr.sunColor[0] = sunColor[0];
-                        gr.sunColor[1] = sunColor[1];
-                        gr.sunColor[2] = sunColor[2];
-
-                        for (int k = 0; k < 3; k++)
-                        {
-                            const float halfSize = std::max((aabbMax[k] - aabbMin[k]) * 0.5f, 1.0f);
-                            gr.worldCenter[k] = (aabbMin[k] + aabbMax[k]) * 0.5f;
-                            gr.worldHalfSizeInv[k] = 1.0f / halfSize;
-                        }
-
-                        memcpy(gr.shadowMapVP, shadowMapVP, 16 * sizeof(float));
-                        gr.shadowMapDepthScale = shadowMapDepthScale;
-                        gr.godRaysIntensity = 2.4f; // +20% vs original 2.0
-                        gr.godRaysEccentricity = 0.75f;
-                        gr.godRaysEnabled = 1u;
-
-                        godRays->Trace(cmd, frameIndex, gr);
+                        const float halfSize = std::max((aabbMax[k] - aabbMin[k]) * 0.5f, 1.0f);
+                        gr.worldCenter[k] = (aabbMin[k] + aabbMax[k]) * 0.5f;
+                        gr.worldHalfSizeInv[k] = 1.0f / halfSize;
                     }
+
+                    memcpy(gr.shadowMapVP, shadowMapVP, 16 * sizeof(float));
+                    gr.shadowMapDepthScale = shadowMapDepthScale;
+                    gr.godRaysIntensity = 2.0f; // Q2RTX default (god_rays_intensity)
+                    gr.godRaysEccentricity = 0.75f;
+                    gr.godRaysEnabled = 1u;
+
+                    // TEMP diagnostic: dump the god rays box state to a file
+                    {
+                        const auto *gu = uniform->GetData();
+                        FILE *f = fopen("C:\\Users\\f1am3d\\repos\\vkquake-rt\\build\\Debug\\rtgl1_godrays_diag.txt", "w");
+                        if (f)
+                        {
+                            fprintf(f, "camera=(%.3f, %.3f, %.3f)\n", gu->cameraPosition[0], gu->cameraPosition[1], gu->cameraPosition[2]);
+                            fprintf(f, "aabbMin=(%.3f, %.3f, %.3f) aabbMax=(%.3f, %.3f, %.3f)\n", aabbMin[0], aabbMin[1], aabbMin[2], aabbMax[0], aabbMax[1], aabbMax[2]);
+                            fprintf(f, "worldCenter=(%.3f, %.3f, %.3f)\n", gr.worldCenter[0], gr.worldCenter[1], gr.worldCenter[2]);
+                            fprintf(f, "worldHalfSizeInv=(%.6f, %.6f, %.6f)\n", gr.worldHalfSizeInv[0], gr.worldHalfSizeInv[1], gr.worldHalfSizeInv[2]);
+                            fprintf(f, "sunDirection=(%.4f, %.4f, %.4f) sunColor=(%.2f, %.2f, %.2f)\n", gr.sunDirection[0], gr.sunDirection[1], gr.sunDirection[2], gr.sunColor[0], gr.sunColor[1], gr.sunColor[2]);
+                            fclose(f);
+                        }
+                    }
+
+                    godRays->Trace(cmd, frameIndex, gr, 0);
+                    godRaysActive = true;
                 }
             }
         }
@@ -843,11 +882,34 @@ void VulkanDevice::Render(VkCommandBuffer cmd, const RgDrawFrameInfo &drawInfo)
             pathTracer->TraceReflectionRefractionRays(params);
         }
 
+        // Q2RTX-style god rays over the reflected/refracted segments. The refl
+        // pass stores each reflected segment length in Q2GodRaysThroughputDist.w
+        // and marks reflection pixels with negative Q2ViewDepth; this pass only
+        // processes those pixels and accumulates on top of the primary result.
+        if (uniform->GetData()->coreQ2RTX && godRaysActive)
+        {
+            godRays->Trace(cmd, frameIndex, gr, 1);
+        }
+
+        // Bilateral upscale of the half-res god rays to full resolution
+        // (Q2RTX god_rays_filter.comp); runs after all trace passes.
+        if (godRaysActive)
+        {
+            godRays->Filter(cmd, frameIndex);
+        }
+
         scene->GetLightManager()->BarrierLightGrid(cmd, frameIndex);
         pathTracer->CalculateInitialReservoirs(params);
         pathTracer->TraceDirectllumination(params);
         pathTracer->TraceIndirectllumination(params);
-        pathTracer->TraceVolumetric(params);
+
+        // The legacy screen-space volumetric is disabled on the Q2RTX core path
+        // (replaced by the traced fog volumes, which work through portals and
+        // in reflections).
+        if (!uniform->GetData()->coreQ2RTX)
+        {
+            pathTracer->TraceVolumetric(params);
+        }
 
         pathTracer->CalculateGradientsSamples(params);
 
@@ -863,13 +925,19 @@ void VulkanDevice::Render(VkCommandBuffer cmd, const RgDrawFrameInfo &drawInfo)
             denoiser->Denoise(cmd, frameIndex, uniform);
         }
 
-        volumetric->ProcessScattering( cmd, frameIndex, uniform.get(), blueNoise.get() );
+        if (!uniform->GetData()->coreQ2RTX)
+        {
+            volumetric->ProcessScattering( cmd, frameIndex, uniform.get(), blueNoise.get() );
+        }
         tonemapping->CalculateExposure(cmd, frameIndex, uniform);
     }
 
     imageComposition->PrepareForRaster( cmd, frameIndex, uniform.get() );
-    volumetric->BarrierToReadScattering( cmd, frameIndex );
-    volumetric->BarrierToReadIllumination( cmd );
+    if (!uniform->GetData()->coreQ2RTX)
+    {
+        volumetric->BarrierToReadScattering( cmd, frameIndex );
+        volumetric->BarrierToReadIllumination( cmd );
+    }
 
     if (!drawInfo.disableRasterization)
     {
@@ -888,9 +956,12 @@ void VulkanDevice::Render(VkCommandBuffer cmd, const RgDrawFrameInfo &drawInfo)
             drawInfo.pLensFlareParams );
     }
 
-    // Q2RTX-style fog volumes (blended in HDR, before tonemapping).
-    // Works on both the legacy and the new Q2RTX core path.
-    if (fogVolumeCount > 0)
+    // Q2RTX-style fog volumes. On the legacy path they are blended as a post
+    // pass here (in HDR, before tonemapping). On the new Q2RTX core path the
+    // fog is traced per ray in the primary/refl passes and accumulated in
+    // Q2FogAccum, then blended by the ASVGF compositing (denoised and
+    // temporally consistent) - so the post pass must not run there.
+    if (fogVolumeCount > 0 && uniform->GetData()->coreQ2RTX == 0)
     {
         q2Denoiser->ApplyFog(cmd, frameIndex, uniform);
     }

@@ -24,6 +24,8 @@
 #include "CmdLabel.h"
 
 #include <algorithm>
+#include <cmath>
+#include <limits>
 
 using namespace RTGL1;
 
@@ -38,8 +40,16 @@ Scene::Scene(
 :
     toResubmitMovable(false),
     isRecordingStatic(false),
-    submittedStaticInCurrentFrame(false)
+    submittedStaticInCurrentFrame(false),
+    aabbInitialized(false)
 {
+    // the world bounds are accumulated in Upload(); start from an empty range
+    // (std::make_shared uses direct-initialization, so members not listed here
+    // would be left uninitialized - e.g. 0xCD in MSVC debug - poisoning the AABB)
+    const float maxF = std::numeric_limits<float>::max();
+    aabbMin[0] = aabbMin[1] = aabbMin[2] = maxF;
+    aabbMax[0] = aabbMax[1] = aabbMax[2] = -maxF;
+
     VertexCollectorFilterTypeFlags_Init();
 
     lightManager = std::make_shared<LightManager>(_device, _allocator);
@@ -117,20 +127,45 @@ bool Scene::Upload(uint32_t frameIndex, const RgGeometryUploadInfo &uploadInfo)
         const RgVertex *verts = uploadInfo.pVertices;
         const uint32_t  count = uploadInfo.vertexCount;
 
-        if (!aabbInitialized && count > 0)
-        {
-            aabbInitialized = true;
-            aabbMin[0] = aabbMax[0] = verts[0].position[0];
-            aabbMin[1] = aabbMax[1] = verts[0].position[1];
-            aabbMin[2] = aabbMax[2] = verts[0].position[2];
-        }
-
         for (uint32_t i = 0; i < count; i++)
         {
+            // apply the geometry transform (world space; the AS uses the same
+            // transform, so the bounds stay consistent with the camera space)
+            float p[3];
             for (int k = 0; k < 3; k++)
             {
-                aabbMin[k] = std::min(aabbMin[k], verts[i].position[k]);
-                aabbMax[k] = std::max(aabbMax[k], verts[i].position[k]);
+                p[k] = uploadInfo.transform.matrix[k][0] * verts[i].position[0] +
+                       uploadInfo.transform.matrix[k][1] * verts[i].position[1] +
+                       uploadInfo.transform.matrix[k][2] * verts[i].position[2] +
+                       uploadInfo.transform.matrix[k][3];
+            }
+
+            // skip invalid vertices (non-finite or absurd coordinates) - they
+            // would poison the world bounds used for the shadow map / god rays
+            if (!std::isfinite(p[0]) || !std::isfinite(p[1]) || !std::isfinite(p[2]))
+            {
+                continue;
+            }
+            if (std::abs(p[0]) > 1.0e7f || std::abs(p[1]) > 1.0e7f || std::abs(p[2]) > 1.0e7f)
+            {
+                continue;
+            }
+
+            if (!aabbInitialized)
+            {
+                aabbInitialized = true;
+                aabbMin[0] = aabbMax[0] = p[0];
+                aabbMin[1] = aabbMax[1] = p[1];
+                aabbMin[2] = aabbMax[2] = p[2];
+            }
+            else
+            {
+                aabbMin[0] = std::min(aabbMin[0], p[0]);
+                aabbMax[0] = std::max(aabbMax[0], p[0]);
+                aabbMin[1] = std::min(aabbMin[1], p[1]);
+                aabbMax[1] = std::max(aabbMax[1], p[1]);
+                aabbMin[2] = std::min(aabbMin[2], p[2]);
+                aabbMax[2] = std::max(aabbMax[2], p[2]);
             }
         }
     }

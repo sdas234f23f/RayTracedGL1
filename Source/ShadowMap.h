@@ -70,7 +70,10 @@ private:
     void DrawGeometry(VkCommandBuffer cmd, const VertexCollector::GeometryDrawInfo &draw);
 
 private:
-    static constexpr uint32_t SHADOW_MAP_SIZE = 2048;
+    // Q2RTX uses SHADOWMAP_SIZE 4096 (shader/constants.h). We used 2048, which
+    // quantized the god rays shaft edges to twice the texel size and made the
+    // shafts look like coarse "individual rays" instead of smooth beams.
+    static constexpr uint32_t SHADOW_MAP_SIZE = 4096;
 
     VkDevice device;
     std::shared_ptr<MemoryAllocator> allocator;

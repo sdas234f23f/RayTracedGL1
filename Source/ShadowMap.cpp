@@ -43,7 +43,14 @@ void ComputeViewProjection(const float sunDirection[3],
         upDir[0] = 1.0f; upDir[1] = 0.0f; upDir[2] = 0.0f;
     }
 
-    float lookDir[3] = {-sunDirection[0], -sunDirection[1], -sunDirection[2]};
+    // The caller passes the FROM-sun light direction (sunDir). Q2RTX's
+    // vkpt_shadow_map_setup takes light->direction (TOWARD the sun) and
+    // negates it, so its shadow camera looks FROM the sun down at the scene.
+    // We must therefore use sunDir AS-IS (no negation) to get the same camera
+    // orientation. Negating it pointed the camera TOWARD the sky, which
+    // flipped near/far depth and produced inverted god rays (light shafts
+    // everywhere except where the sun actually shines).
+    float lookDir[3] = {sunDirection[0], sunDirection[1], sunDirection[2]};
     RTGL1::Utils::Normalize(lookDir);
 
     float leftDir[3];
@@ -119,7 +126,12 @@ void ComputeViewProjection(const float sunDirection[3],
         1.0f,
     };
 
-    RTGL1::Matrix::Multiply(outViewProjection, projectionMatrix, viewMatrix);
+    // Matrix::Multiply(result, a, b) computes b*a (applies a first, then b),
+    // so passing (view, proj) yields Proj*View = world -> view -> clip, which
+    // is the convention used everywhere else (see Matrix::GetViewProjection).
+    // Passing (proj, view) here produced a transposed VP and a broken shadow
+    // map (depth encoded along a garbage direction -> shadows always lit).
+    RTGL1::Matrix::Multiply(outViewProjection, viewMatrix, projectionMatrix);
 
     *outDepthScale = depth;
 }
@@ -353,7 +365,13 @@ void ShadowMap::CreatePipelines(const ShaderManager *shaderManager)
     rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
     rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
     rasterizer.lineWidth = 1.0f;
-    rasterizer.cullMode = VK_CULL_MODE_FRONT_BIT;
+    // Q2RTX culls front faces here because Q2 BSP geometry has a consistent
+    // winding. The Q1 geometry upload has unreliable winding (the rasterizer
+    // uses VK_CULL_MODE_NONE for the same reason), so culling would punch
+    // spurious holes into the shadow map and the god rays would shine through
+    // random walls. Render all faces: the depth test still keeps the nearest
+    // (sun-facing) side, which is what a shadow map needs.
+    rasterizer.cullMode = VK_CULL_MODE_NONE;
     rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;
     rasterizer.depthClampEnable = VK_FALSE;
     rasterizer.rasterizerDiscardEnable = VK_FALSE;

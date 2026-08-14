@@ -146,6 +146,14 @@ vec3 applyVolumetrics( const ivec2 pix, const vec3 color )
         return color;
     }
 
+    // On the new Q2RTX core path the level volumetric is provided by the traced
+    // fog volumes (per-ray, works through portals and in reflections), so the
+    // legacy screen-space volumetric composite is disabled there.
+    if( globalUniform.coreQ2RTX != 0 )
+    {
+        return color;
+    }
+
     uint seed = getRandomSeed( pix, globalUniform.frameId );
     vec3 rnd  = rnd8_4( seed, 0 ).xyz;
 
@@ -201,8 +209,27 @@ void main()
     vec3 hdr        = texelFetch( framebufFinal_Sampler, pix, 0 ).rgb;
     const vec3 screenEmis = texelFetch( framebufScreenEmission_Sampler, pix, 0 ).rgb;
 
-    // volumetric sunlight (god rays) — additive, before tonemapping
-    hdr += texelFetch( framebufGodRays_Sampler, pix, 0 ).rgb;
+    // volumetric sunlight (god rays) - additive, before tonemapping. The god
+    // rays pass runs at half resolution (CmGodRays) and is bilaterally
+    // upscaled to full resolution (CmGodRaysFilter), so the filtered buffer is
+    // composited here. Q2RTX-style (coreQ2RTX): the primary pass fills the
+    // whole image, then the reflection pass accumulates the reflected-segment
+    // god rays on top, so the result is composited unconditionally. On the
+    // legacy path there is no god rays reflection pass, so reflection/refraction
+    // pixels are skipped (their march follows the primary camera ray and would
+    // be wrong on reflections).
+    if (globalUniform.coreQ2RTX != 0)
+    {
+        hdr += texelFetch( framebufGodRaysFiltered_Sampler, pix, 0 ).rgb;
+    }
+    else
+    {
+        const float q2SplitFlag = texelFetch(framebufThroughput_Sampler, getCheckerboardPix(pix), 0).a;
+        if (q2SplitFlag == 0.0)
+        {
+            hdr += texelFetch( framebufGodRaysFiltered_Sampler, pix, 0 ).rgb;
+        }
+    }
 
     vec3 color = finalizeColor( hdr, screenEmis );
     vec3 bloom = getBloomInput( hdr, screenEmis );
@@ -225,7 +252,12 @@ void main()
 
 vec3 processDebug(const ivec2 pix, const vec3 fallback)
 {
-    if ((globalUniform.debugShowFlags & DEBUG_SHOW_FLAG_MOTION_VECTORS) != 0)
+    if ((globalUniform.debugShowFlags & DEBUG_SHOW_FLAG_GOD_RAYS) != 0)
+    {
+        // filtered (bilateral-upscaled) volumetric sunlight buffer
+        return texelFetch(framebufGodRaysFiltered_Sampler, pix, 0).rgb * 4.0;
+    }
+    else if ((globalUniform.debugShowFlags & DEBUG_SHOW_FLAG_MOTION_VECTORS) != 0)
     {
         const vec2 m = texelFetch(framebufMotion_Sampler, getCheckerboardPix(pix), 0).rg;
         return vec3(abs(m.r), abs(m.g), 0);
